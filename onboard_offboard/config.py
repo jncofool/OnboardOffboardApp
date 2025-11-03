@@ -6,10 +6,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
+import shutil
+
 import yaml
 
 
 DEFAULT_CONFIG_PATH = Path("config/settings.yaml")
+DEFAULT_TEMPLATE_PATH = Path("config/settings.example.yaml")
 ENV_CONFIG_PATH = "ONBOARD_CONFIG"
 ENV_PREFIX = "ONBOARD_"
 
@@ -96,9 +99,42 @@ def _deep_merge(base: Dict[str, Any], overrides: Dict[str, Any]) -> Dict[str, An
     return result
 
 
+def _resolve_config_path(path: Optional[Path] = None) -> Path:
+    if path is not None:
+        return Path(path)
+    env_path = os.environ.get(ENV_CONFIG_PATH)
+    if env_path:
+        return Path(env_path)
+    return DEFAULT_CONFIG_PATH
+
+
+def ensure_default_config(
+    path: Optional[Path] = None, template_path: Optional[Path] = None
+) -> Path:
+    """Ensure a configuration file exists, copying from the example if needed."""
+
+    target_path = _resolve_config_path(path)
+    if target_path.exists():
+        return target_path
+
+    template = Path(template_path) if template_path is not None else DEFAULT_TEMPLATE_PATH
+    if not template.exists():
+        raise ConfigurationError(
+            "Default configuration template not found. "
+            "Ensure 'config/settings.example.yaml' is present or specify a template."
+        )
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(template, target_path)
+    return target_path
+
+
 def _load_config_dict(path: Optional[Path] = None) -> Dict[str, Any]:
-    path = path or Path(os.environ.get(ENV_CONFIG_PATH, DEFAULT_CONFIG_PATH))
-    config_dict = _load_from_file(path)
+    resolved_path = _resolve_config_path(path)
+    if resolved_path == DEFAULT_CONFIG_PATH:
+        ensure_default_config(resolved_path)
+
+    config_dict = _load_from_file(resolved_path)
     return _apply_environment_overrides(config_dict)
 
 
@@ -179,6 +215,7 @@ def load_config(path: Optional[Path] = None) -> AppConfig:
 __all__ = [
     "AppConfig",
     "ConfigurationError",
+    "ensure_default_config",
     "LDAPConfig",
     "SyncConfig",
     "StorageConfig",
