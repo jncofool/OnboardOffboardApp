@@ -2,14 +2,6 @@
 from __future__ import annotations
 
 import json
-<<<<<<< ours
-<<<<<<< ours
-import shlex
-import subprocess
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -19,14 +11,7 @@ from .ad_client import ADClient
 from .config import AppConfig, ConfigurationError, load_config
 from .models import Employee, JobRole
 from .storage import load_job_roles, save_job_roles
-<<<<<<< ours
-<<<<<<< ours
-=======
 from .sync import run_sync_command
->>>>>>> theirs
-=======
-from .sync import run_sync_command
->>>>>>> theirs
 
 app = typer.Typer(help="Manage onboarding workflows across Active Directory and Microsoft 365.")
 role_app = typer.Typer(help="Manage reusable job role templates.")
@@ -151,29 +136,6 @@ def show_tree(
     typer.echo(json.dumps(tree, indent=2))
 
 
-<<<<<<< ours
-<<<<<<< ours
-def _run_sync(sync_command: str, shell: bool, timeout: int) -> None:
-    typer.echo("Triggering directory sync...")
-    try:
-        subprocess.run(
-            sync_command if shell else shlex.split(sync_command),
-            shell=shell,
-            timeout=timeout,
-            check=True,
-        )
-    except FileNotFoundError as exc:
-        typer.echo(f"Sync command not found: {exc}")
-    except subprocess.CalledProcessError as exc:
-        typer.echo(f"Sync command failed with exit code {exc.returncode}.")
-    except subprocess.TimeoutExpired:
-        typer.echo("Sync command timed out.")
-
-
-=======
->>>>>>> theirs
-=======
->>>>>>> theirs
 @app.command("onboard")
 def onboard_user(
     first_name: str = typer.Argument(..., help="Employee first name."),
@@ -225,21 +187,11 @@ def onboard_user(
     typer.echo("User provisioned:")
     typer.echo(json.dumps(result, indent=2))
 
-<<<<<<< ours
-<<<<<<< ours
-    _run_sync(config.sync.command, config.sync.shell, config.sync.timeout)
-=======
-=======
->>>>>>> theirs
     typer.echo("Triggering directory sync...")
     try:
         run_sync_command(config.sync)
     except RuntimeError as exc:
         typer.echo(str(exc))
-<<<<<<< ours
->>>>>>> theirs
-=======
->>>>>>> theirs
 
 
 def run():
