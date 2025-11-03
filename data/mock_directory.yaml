@@ -18,4 +18,17 @@ tree:
       children: []
   - name: OU=Contractors,DC=example,DC=com
     children: []
-users: []
+users:
+- distinguished_name: CN=Mark Daneshvar,Amano Mcgann
+  attributes:
+    givenName: Mark
+    sn: Daneshvar
+    displayName: Mark Daneshvar
+    userPrincipalName: mark.daneshvar@example.com
+    sAMAccountName: mark.daneshvar
+    mail: mark.daneshvar@example.com
+    title: Field Service Technician
+    department: Field Services
+    telephoneNumber: '16512109176'
+    manager: CN=Alex Johnson,OU=Management,DC=example,DC=com
+    userAccountControl: 512

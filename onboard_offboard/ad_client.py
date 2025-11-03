@@ -43,6 +43,90 @@ class MockDirectory:
     def list_managers(self) -> List[Dict[str, str]]:
         return [dict(manager) for manager in self._data.get("managers", [])]
 
+    def list_job_titles(self, query: Optional[str] = None, limit: int = 25) -> List[str]:
+        titles: List[str] = []
+        for user in self._data.get("users", []):
+            title = user.get("attributes", {}).get("title")
+            if not title:
+                continue
+            titles.append(str(title))
+        unique_titles = []
+        seen = set()
+        lowered_query = query.lower() if query else None
+        for title in titles:
+            if lowered_query and lowered_query not in title.lower():
+                continue
+            if title not in seen:
+                seen.add(title)
+                unique_titles.append(title)
+        unique_titles.sort()
+        return unique_titles[:limit]
+
+    def list_companies(self, query: Optional[str] = None, limit: int = 25) -> List[str]:
+        lowered_query = query.lower() if query else None
+        seen: set[str] = set()
+        companies: List[str] = []
+        for user in self._data.get("users", []):
+            company = user.get("attributes", {}).get("company")
+            if not company:
+                continue
+            company = str(company)
+            if lowered_query and lowered_query not in company.lower():
+                continue
+            if company not in seen:
+                seen.add(company)
+                companies.append(company)
+        companies.sort()
+        return companies[:limit]
+
+    def list_offices(self, query: Optional[str] = None, limit: int = 25) -> List[str]:
+        lowered_query = query.lower() if query else None
+        seen: set[str] = set()
+        offices: List[str] = []
+        for user in self._data.get("users", []):
+            office = user.get("attributes", {}).get("physicalDeliveryOfficeName")
+            if not office:
+                continue
+            office = str(office)
+            if lowered_query and lowered_query not in office.lower():
+                continue
+            if office not in seen:
+                seen.add(office)
+                offices.append(office)
+        offices.sort()
+        return offices[:limit]
+
+    def search_managers(self, query: str, limit: int = 25) -> List[Dict[str, str]]:
+        lowered = query.lower()
+        results: List[Dict[str, str]] = []
+        for manager in self.list_managers():
+            haystack = " ".join(
+                str(manager.get(key, ""))
+                for key in ("displayName", "distinguishedName", "mail", "title")
+            ).lower()
+            if lowered in haystack:
+                results.append(dict(manager))
+            if len(results) >= limit:
+                break
+        return results
+
+    def search_organizational_units(self, query: Optional[str] = None, limit: int = 25) -> List[str]:
+        tree = self._data.get("tree") or {}
+        entries: List[str] = []
+        lowered = query.lower() if query else None
+
+        def _walk(node: Dict[str, Any]) -> None:
+            name = node.get("name")
+            if name and name.upper().startswith("OU="):
+                if not lowered or lowered in name.lower():
+                    entries.append(name)
+            for child in node.get("children", []):
+                _walk(child)
+
+        _walk(tree)
+        entries = sorted(dict.fromkeys(entries))
+        return entries[:limit]
+
     def tree_for(self, base_dn: str, depth: int) -> Dict[str, Any]:
         tree = self._data.get("tree") or {"name": base_dn, "children": []}
         subtree = self._find_subtree(tree, base_dn) if base_dn else tree
@@ -176,6 +260,184 @@ class ADClient:
             results.append(payload)
         return results
 
+    def list_job_titles(self, query: Optional[str] = None, limit: int = 25) -> List[str]:
+        limit = self._clamp_limit(limit)
+        if self._mock_directory:
+            return self._mock_directory.list_job_titles(query, limit)
+
+        assert self.connection is not None
+        base_dn = self.config.base_dn
+        if query:
+            escaped = self._escape_filter_value(query)
+            filter_str = f"(&(objectClass=user)(title=*{escaped}*))"
+        else:
+            filter_str = "(&(objectClass=user)(title=*))"
+
+        self.connection.search(
+            search_base=base_dn,
+            search_filter=filter_str,
+            search_scope=SUBTREE,
+            attributes=["title"],
+            size_limit=limit,
+        )
+
+        titles: List[str] = []
+        seen = set()
+        for entry in self.connection.entries:
+            if "title" not in entry:
+                continue
+            title = str(entry["title"])
+            if not title or title in seen:
+                continue
+            seen.add(title)
+            titles.append(title)
+            if len(titles) >= limit:
+                break
+        titles.sort()
+        return titles
+
+    def list_companies(self, query: Optional[str] = None, limit: int = 25) -> List[str]:
+        limit = self._clamp_limit(limit)
+        if self._mock_directory:
+            return self._mock_directory.list_companies(query, limit)
+
+        assert self.connection is not None
+        base_dn = self.config.base_dn
+        if query:
+            escaped = self._escape_filter_value(query)
+            filter_str = f"(&(objectClass=user)(company=*{escaped}*))"
+        else:
+            filter_str = "(&(objectClass=user)(company=*))"
+
+        self.connection.search(
+            search_base=base_dn,
+            search_filter=filter_str,
+            search_scope=SUBTREE,
+            attributes=["company"],
+            size_limit=limit,
+        )
+
+        companies: List[str] = []
+        seen: set[str] = set()
+        for entry in self.connection.entries:
+            if "company" not in entry:
+                continue
+            value = str(entry["company"])
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            companies.append(value)
+            if len(companies) >= limit:
+                break
+        companies.sort()
+        return companies
+
+    def list_offices(self, query: Optional[str] = None, limit: int = 25) -> List[str]:
+        limit = self._clamp_limit(limit)
+        if self._mock_directory:
+            return self._mock_directory.list_offices(query, limit)
+
+        assert self.connection is not None
+        base_dn = self.config.base_dn
+        attribute = "physicalDeliveryOfficeName"
+        if query:
+            escaped = self._escape_filter_value(query)
+            filter_str = f"(&(objectClass=user)({attribute}=*{escaped}*))"
+        else:
+            filter_str = f"(&(objectClass=user)({attribute}=*))"
+
+        self.connection.search(
+            search_base=base_dn,
+            search_filter=filter_str,
+            search_scope=SUBTREE,
+            attributes=[attribute],
+            size_limit=limit,
+        )
+
+        offices: List[str] = []
+        seen: set[str] = set()
+        for entry in self.connection.entries:
+            if attribute not in entry:
+                continue
+            value = str(entry[attribute])
+            if not value or value in seen:
+                continue
+            seen.add(value)
+            offices.append(value)
+            if len(offices) >= limit:
+                break
+        offices.sort()
+        return offices
+
+    def search_managers(self, query: str, limit: int = 25) -> List[Dict[str, str]]:
+        limit = self._clamp_limit(limit)
+        if not query:
+            return []
+        if self._mock_directory:
+            return self._mock_directory.search_managers(query, limit)
+
+        assert self.connection is not None
+        base_dn = self.config.base_dn
+        filter_str = self.config.manager_search_filter or "(objectClass=user)"
+        escaped = self._escape_filter_value(query)
+        combined_filter = f"(&{filter_str}(|(displayName=*{escaped}*)(sAMAccountName=*{escaped}*)(mail=*{escaped}*)))"
+        attributes = list(
+            set(self.config.manager_attributes)
+            | {"distinguishedName", "sAMAccountName", "userPrincipalName"}
+        )
+
+        self.connection.search(
+            search_base=base_dn,
+            search_filter=combined_filter,
+            search_scope=SUBTREE,
+            attributes=attributes,
+            size_limit=limit,
+        )
+        results: List[Dict[str, str]] = []
+        for entry in self.connection.entries:
+            payload = {}
+            for attribute in attributes:
+                if attribute in entry:
+                    payload[attribute] = str(entry[attribute])
+            if payload:
+                results.append(payload)
+            if len(results) >= limit:
+                break
+        return results
+
+    def search_organizational_units(self, query: Optional[str] = None, limit: int = 25) -> List[str]:
+        limit = self._clamp_limit(limit)
+        if self._mock_directory:
+            return self._mock_directory.search_organizational_units(query, limit)
+
+        assert self.connection is not None
+        base_dn = self.config.base_dn
+        if query:
+            escaped = self._escape_filter_value(query)
+            filter_str = f"(&(objectClass=organizationalUnit)(ou=*{escaped}*))"
+        else:
+            filter_str = "(&(objectClass=organizationalUnit)(ou=*))"
+
+        self.connection.search(
+            search_base=base_dn,
+            search_filter=filter_str,
+            search_scope=SUBTREE,
+            attributes=["distinguishedName"],
+            size_limit=limit,
+        )
+
+        ous: List[str] = []
+        seen = set()
+        for entry in self.connection.entries:
+            dn = str(entry.entry_dn)
+            if dn not in seen:
+                seen.add(dn)
+                ous.append(dn)
+            if len(ous) >= limit:
+                break
+        ous.sort()
+        return ous
+
     # Directory tree ------------------------------------------------------
     def fetch_directory_tree(self, base_dn: Optional[str] = None, depth: int = 2) -> Dict[str, Any]:
         if self._mock_directory:
@@ -239,19 +501,35 @@ class ADClient:
             self._mock_directory.add_user(distinguished_name, record_attributes)
         else:
             assert self.connection is not None
-            self.connection.add(
+            added = self.connection.add(
                 dn=distinguished_name,
                 object_class=["top", "person", "organizationalPerson", "user"],
                 attributes=attributes,
             )
+            if not added:
+                result = self.connection.result or {}
+                description = result.get("description", "Unknown error")
+                message = result.get("message")
+                raise RuntimeError(
+                    f"Active Directory rejected the user creation request ({description})."
+                    + (f" {message}" if message else "")
+                )
 
             if password:
                 self.connection.extend.microsoft.modify_password(distinguished_name, password)
             if enable_account:
                 # Enable account by setting userAccountControl to 512 (NORMAL_ACCOUNT)
-                self.connection.modify(
+                enabled = self.connection.modify(
                     distinguished_name, {"userAccountControl": [(MODIFY_REPLACE, [512])]}
                 )
+                if not enabled:
+                    result = self.connection.result or {}
+                    description = result.get("description", "Unknown error")
+                    message = result.get("message")
+                    raise RuntimeError(
+                        f"Active Directory rejected the enable-account request ({description})."
+                        + (f" {message}" if message else "")
+                    )
 
         return {
             "distinguished_name": distinguished_name,
@@ -336,6 +614,15 @@ class ADClient:
     def _domain_from_dn(base_dn: str) -> str:
         parts = [segment.split("=")[1] for segment in base_dn.split(",") if segment.upper().startswith("DC=")]
         return ".".join(parts)
+
+    @staticmethod
+    def _clamp_limit(value: int, maximum: int = 100) -> int:
+        try:
+            numeric = int(value)
+        except (TypeError, ValueError):
+            numeric = 25
+        return max(1, min(numeric, maximum))
+
     @staticmethod
     def _escape_filter_value(value: str) -> str:
         replacements = {
