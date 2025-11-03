@@ -1,0 +1,10 @@
+# Default job roles configuration.
+# Use the CLI to manage entries: `python -m onboard_offboard.cli role add --help`.
+roles:
+  - name: Field Service Technician
+    description: Front-line technician responsible for on-site service visits.
+    user_ou: OU=Field Services,OU=Employees,DC=example,DC=com
+    default_manager_dn: CN=Alex Johnson,OU=Management,DC=example,DC=com
+    attributes:
+      title: Field Service Technician
+      department: Field Services
