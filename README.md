@@ -1,6 +1,7 @@
 # OnboardOffboardApp
 
 <<<<<<< ours
+<<<<<<< ours
 A command-line toolkit for orchestrating onboarding and offboarding workflows in a hybrid Active Directory and Microsoft 365 environment. The initial milestone focuses on configurable job roles, manager selection, and directory synchronization.
 
 ## Features
@@ -10,6 +11,8 @@ A command-line toolkit for orchestrating onboarding and offboarding workflows in
 - Explore potential managers and the Active Directory OU tree directly from the command line.
 - Provision new employees into AD and trigger a configurable directory sync command (for example Azure AD Connect).
 =======
+=======
+>>>>>>> theirs
 A browser-based onboarding and offboarding portal (with a companion CLI) for hybrid Active Directory and Microsoft 365 environments. The application keeps every setting configurable so you can point it at mock data for local demos or your production tenant for day-to-day operations.
 
 ## Features
@@ -19,6 +22,9 @@ A browser-based onboarding and offboarding portal (with a companion CLI) for hyb
 - Manage reusable job role templates that define default OUs, managers, and attribute payloads.
 - Explore potential managers and the Active Directory OU tree via the portal or CLI.
 - Provision new employees into AD, clone from existing accounts, and trigger a configurable directory sync command (for example Azure AD Connect).
+<<<<<<< ours
+>>>>>>> theirs
+=======
 >>>>>>> theirs
 
 ## Prerequisites
@@ -76,10 +82,13 @@ export ONBOARD_SYNC__COMMAND="powershell.exe -Command \"Start-ADSyncSyncCycle -P
 | `storage` | `job_roles_file` | Path to the YAML file containing job role definitions. |
 
 <<<<<<< ours
+<<<<<<< ours
 ## Usage
 
 All commands are executed with `python -m onboard_offboard`.
 =======
+=======
+>>>>>>> theirs
 ## Web portal
 
 Launch the portal with:
@@ -108,6 +117,9 @@ export ONBOARD_WEB_DEBUG=1            # enable Flask debug mode
 ## Command-line usage
 
 All CLI commands are executed with `python -m onboard_offboard`.
+<<<<<<< ours
+>>>>>>> theirs
+=======
 >>>>>>> theirs
 
 ### Manage job roles

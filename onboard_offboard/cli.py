@@ -3,8 +3,11 @@ from __future__ import annotations
 
 import json
 <<<<<<< ours
+<<<<<<< ours
 import shlex
 import subprocess
+=======
+>>>>>>> theirs
 =======
 >>>>>>> theirs
 from pathlib import Path
@@ -17,6 +20,10 @@ from .config import AppConfig, ConfigurationError, load_config
 from .models import Employee, JobRole
 from .storage import load_job_roles, save_job_roles
 <<<<<<< ours
+<<<<<<< ours
+=======
+from .sync import run_sync_command
+>>>>>>> theirs
 =======
 from .sync import run_sync_command
 >>>>>>> theirs
@@ -145,6 +152,7 @@ def show_tree(
 
 
 <<<<<<< ours
+<<<<<<< ours
 def _run_sync(sync_command: str, shell: bool, timeout: int) -> None:
     typer.echo("Triggering directory sync...")
     try:
@@ -162,6 +170,8 @@ def _run_sync(sync_command: str, shell: bool, timeout: int) -> None:
         typer.echo("Sync command timed out.")
 
 
+=======
+>>>>>>> theirs
 =======
 >>>>>>> theirs
 @app.command("onboard")
@@ -216,13 +226,19 @@ def onboard_user(
     typer.echo(json.dumps(result, indent=2))
 
 <<<<<<< ours
+<<<<<<< ours
     _run_sync(config.sync.command, config.sync.shell, config.sync.timeout)
 =======
+=======
+>>>>>>> theirs
     typer.echo("Triggering directory sync...")
     try:
         run_sync_command(config.sync)
     except RuntimeError as exc:
         typer.echo(str(exc))
+<<<<<<< ours
+>>>>>>> theirs
+=======
 >>>>>>> theirs
 
 
