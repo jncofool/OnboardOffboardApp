@@ -167,6 +167,21 @@ def _to_int(value: Any) -> int:
     return int(value)
 
 
+def _optional_path(raw: Any) -> Optional[Path]:
+    """Convert a raw config value to ``Path`` if set, otherwise ``None``."""
+
+    if raw is None:
+        return None
+    if isinstance(raw, Path):
+        return raw
+    if isinstance(raw, str):
+        stripped = raw.strip()
+        if not stripped:
+            return None
+        return Path(stripped)
+    return Path(raw)
+
+
 def load_config(path: Optional[Path] = None) -> AppConfig:
     """Load application configuration from disk and environment variables."""
 
@@ -190,7 +205,7 @@ def load_config(path: Optional[Path] = None) -> AppConfig:
                     ldap_section.get("manager_attributes", ("displayName", "mail", "title"))
                 )
             ),
-            mock_data_file=Path(ldap_section["mock_data_file"]) if "mock_data_file" in ldap_section else None,
+            mock_data_file=_optional_path(ldap_section.get("mock_data_file")),
         )
     except KeyError as exc:
         raise ConfigurationError(f"Missing LDAP configuration key: {exc}.") from exc

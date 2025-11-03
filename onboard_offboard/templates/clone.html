@@ -50,20 +50,64 @@
       </div>
       <div class="field">
         <label for="username">New Username (sAMAccountName)</label>
-        <input id="username" name="username" type="text" value="{{ request.form.username or '' }}" required />
+        <input
+          id="username"
+          name="username"
+          type="text"
+          value="{{ request.form.username or generated_username or (selected_user.get('sAMAccountName') if selected_user else '') or '' }}"
+          required
+          autocomplete="off"
+        />
       </div>
       <div class="field">
         <label for="email">New Email</label>
-        <input id="email" name="email" type="email" value="{{ request.form.email or '' }}" required />
+        <input
+          id="email"
+          name="email"
+          type="email"
+          value="{{ request.form.email or generated_email or (selected_user.get('mail') if selected_user else '') or '' }}"
+          required
+          {% if email_domain %}readonly{% endif %}
+        />
+      </div>
+      <div class="field">
+        <label for="telephone_number">Telephone Number (optional)</label>
+        <input
+          id="telephone_number"
+          name="telephone_number"
+          type="tel"
+          value="{{ request.form.telephone_number or selected_user.get('telephoneNumber') or '' }}"
+          placeholder="+16125551234"
+        />
+      </div>
+      <div class="field">
+        <label for="mobile_number">Mobile Number (optional)</label>
+        <input
+          id="mobile_number"
+          name="mobile_number"
+          type="tel"
+          value="{{ request.form.mobile_number or selected_user.get('mobile') or '' }}"
+          placeholder="+16125551234"
+        />
       </div>
       <div class="field">
         <label for="job_role">Target Job Role</label>
-        <select id="job_role" name="job_role" required>
-          <option value="" disabled {% if not request.form.job_role %}selected{% endif %}>Select a role</option>
-          {% for name, role in job_roles.items() %}
-            <option value="{{ name }}" {% if request.form.job_role == name %}selected{% endif %}>{{ name }}</option>
+        <input
+          id="job_role"
+          name="job_role"
+          type="text"
+          list="clone-job-role-suggestions"
+          value="{{ request.form.job_role or '' }}"
+          placeholder="Start typing a job title"
+          required
+          autocomplete="off"
+        />
+        <datalist id="clone-job-role-suggestions">
+          {% for name in job_roles.keys() %}
+            <option value="{{ name }}"></option>
           {% endfor %}
-        </select>
+        </datalist>
+        <div class="hint">Pick an existing role or enter a new job title.</div>
       </div>
       <div class="field">
         <label for="password">Temporary Password (optional)</label>
@@ -71,25 +115,76 @@
       </div>
       <div class="field">
         <label for="manager_dn">Manager</label>
-        <select id="manager_dn" name="manager_dn">
-          <option value="" {% if not (request.form.manager_dn or default_manager) %}selected{% endif %}>Use job role default</option>
-          {% for manager in managers %}
-            {% set dn = manager.get('distinguishedName') %}
-            <option value="{{ dn }}" {% if (request.form.manager_dn or default_manager) == dn %}selected{% endif %}>
-              {{ manager.get('displayName') or dn }} ({{ manager.get('title') or 'No title' }})
-            </option>
+        <div class="autocomplete">
+          <input
+            id="manager_search"
+            name="manager_search"
+            type="text"
+            value="{{ request.form.manager_search or default_manager_label or '' }}"
+            placeholder="Search by name, username, or email"
+            autocomplete="off"
+          />
+          <input
+            id="manager_dn"
+            name="manager_dn"
+            type="hidden"
+            value="{{ request.form.manager_dn or default_manager or '' }}"
+          />
+          <div class="autocomplete-results" id="manager_results" hidden></div>
+        </div>
+        <button type="button" class="inline-button" id="manager_use_default">Use job role default</button>
+        <div class="hint">Leave blank to apply the job role&rsquo;s default manager.</div>
+      </div>
+      <div class="field">
+        <label for="company">Company</label>
+        <input
+          id="company"
+          name="company"
+          type="text"
+          list="clone-company-suggestions"
+          value="{{ request.form.company or selected_user.get('company') or '' }}"
+          placeholder="Select or type a company"
+          autocomplete="off"
+        />
+        <datalist id="clone-company-suggestions">
+          {% for company in companies %}
+            <option value="{{ company }}"></option>
           {% endfor %}
-        </select>
+        </datalist>
+      </div>
+      <div class="field">
+        <label for="office">Office (optional)</label>
+        <input
+          id="office"
+          name="office"
+          type="text"
+          list="clone-office-suggestions"
+          value="{{ request.form.office or selected_user.get('physicalDeliveryOfficeName') or '' }}"
+          placeholder="Select or type an office"
+          autocomplete="off"
+        />
+        <datalist id="clone-office-suggestions">
+          {% for office in offices %}
+            <option value="{{ office }}"></option>
+          {% endfor %}
+        </datalist>
       </div>
       <div class="field">
         <label for="user_ou">Organizational Unit</label>
-        <select id="user_ou" name="user_ou">
-          <option value="" {% if not (request.form.user_ou or default_ou) %}selected{% endif %}>Use job role default</option>
+        <input
+          id="user_ou"
+          name="user_ou"
+          type="text"
+          list="clone-ou-suggestions"
+          value="{{ request.form.user_ou or default_ou or '' }}"
+          placeholder="Leave blank to use the job role default"
+          autocomplete="off"
+        />
+        <datalist id="clone-ou-suggestions">
           {% for ou in ous %}
-            {% set selected_value = request.form.user_ou or default_ou %}
-            <option value="{{ ou }}" {% if selected_value == ou %}selected{% endif %}>{{ ou }}</option>
+            <option value="{{ ou }}"></option>
           {% endfor %}
-        </select>
+        </datalist>
       </div>
       <div class="field">
         <label for="attributes">Attributes (key=value per line)</label>
@@ -99,5 +194,229 @@
         <button type="submit">Clone Account &amp; Sync</button>
       </div>
     </form>
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        const fetchJson = async (endpoint, query, limit = 20) => {
+          const url = new URL(endpoint, window.location.origin);
+          if (query) {
+            url.searchParams.set("q", query);
+          }
+          if (limit) {
+            url.searchParams.set("limit", limit);
+          }
+          const response = await fetch(url.toString(), {
+            headers: { Accept: "application/json" },
+          });
+          if (!response.ok) {
+            throw new Error(`Directory lookup failed (${response.status})`);
+          }
+          return response.json();
+        };
+
+        const wireDatalist = (inputId, datalistId, endpoint, initial = []) => {
+          const input = document.getElementById(inputId);
+          const datalist = document.getElementById(datalistId);
+          if (!input || !datalist) {
+            return;
+          }
+          const render = (items) => {
+            datalist.innerHTML = "";
+            items.forEach((item) => {
+              if (!item) {
+                return;
+              }
+              const option = document.createElement("option");
+              option.value = item;
+              datalist.appendChild(option);
+            });
+          };
+          render(initial);
+          let timer;
+          input.addEventListener("input", () => {
+            clearTimeout(timer);
+            const value = input.value.trim();
+            if (value.length < 2) {
+              return;
+            }
+            timer = setTimeout(async () => {
+              try {
+                const payload = await fetchJson(endpoint, value);
+                render(payload.items || []);
+              } catch (error) {
+                console.error(error);
+              }
+            }, 200);
+          });
+        };
+
+        const wireManagerAutocomplete = () => {
+          const input = document.getElementById("manager_search");
+          const hidden = document.getElementById("manager_dn");
+          const results = document.getElementById("manager_results");
+          const useDefaultBtn = document.getElementById("manager_use_default");
+          if (!input || !hidden || !results || !useDefaultBtn) {
+            return;
+          }
+          const clearResults = () => {
+            results.innerHTML = "";
+            results.hidden = true;
+          };
+          let timer;
+          input.addEventListener("input", () => {
+            if (!input.dataset.manual) {
+              hidden.value = "";
+            }
+            input.dataset.manual = "1";
+            clearTimeout(timer);
+            const value = input.value.trim();
+            if (value.length < 2) {
+              clearResults();
+              return;
+            }
+            timer = setTimeout(async () => {
+              try {
+                const payload = await fetchJson("/api/managers", value);
+                results.innerHTML = "";
+                (payload.items || []).forEach((item) => {
+                  if (!item || !item.distinguishedName) {
+                    return;
+                  }
+                  const div = document.createElement("div");
+                  div.className = "autocomplete-item";
+                  const segments = [];
+                  if (item.displayName) {
+                    segments.push(item.displayName);
+                  }
+                  if (item.title) {
+                    segments.push(`(${item.title})`);
+                  }
+                  if (item.mail) {
+                    segments.push(item.mail);
+                  }
+                  if (item.sAMAccountName) {
+                    segments.push(item.sAMAccountName);
+                  }
+                  if (item.userPrincipalName && item.userPrincipalName !== item.mail) {
+                    segments.push(item.userPrincipalName);
+                  }
+                  const label = segments.join(" ").trim();
+                  div.textContent = label || item.distinguishedName;
+                  div.dataset.dn = item.distinguishedName;
+                  div.dataset.display = label;
+                  div.addEventListener("mousedown", (event) => {
+                    event.preventDefault();
+                    hidden.value = div.dataset.dn;
+                    input.value = div.dataset.display || div.dataset.dn;
+                    input.dataset.manual = "0";
+                    clearResults();
+                  });
+                  results.appendChild(div);
+                });
+                results.hidden = results.children.length === 0;
+              } catch (error) {
+                console.error(error);
+                clearResults();
+              }
+            }, 200);
+          });
+          input.addEventListener("blur", () => {
+            setTimeout(clearResults, 150);
+          });
+          useDefaultBtn.addEventListener("click", () => {
+            input.value = "";
+            hidden.value = "";
+            delete input.dataset.manual;
+            clearResults();
+          });
+        };
+
+        const domain = {{ (email_domain or '')|tojson }};
+        const emailInput = document.getElementById("email");
+        const usernameInput = document.getElementById("username");
+        const generatedUsername = {{ generated_username|tojson }};
+
+        const updateEmail = () => {
+          if (!domain || !emailInput || !usernameInput) {
+            return;
+          }
+          const username = usernameInput.value.trim();
+          emailInput.value = username ? `${username}@${domain}` : "";
+        };
+
+        let lastGeneratedUsername = usernameInput ? usernameInput.value : "";
+        let usernameManuallyEdited = false;
+        if (usernameInput) {
+          if (usernameInput.value && usernameInput.value !== generatedUsername) {
+            usernameManuallyEdited = true;
+          } else {
+            lastGeneratedUsername = usernameInput.value || generatedUsername || "";
+          }
+          usernameInput.addEventListener("input", () => {
+            if (usernameInput.value !== lastGeneratedUsername) {
+              usernameManuallyEdited = true;
+            }
+            updateEmail();
+          });
+        }
+
+        const slugify = (value) => {
+          if (!value) {
+            return "";
+          }
+          return value
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .toLowerCase()
+            .replace(/[^a-z0-9]/g, "");
+        };
+
+        const updateUsernameIfNeeded = () => {
+          if (!usernameInput || usernameManuallyEdited) {
+            return;
+          }
+          const first = slugify(document.getElementById("first_name")?.value || "");
+          const last = slugify(document.getElementById("last_name")?.value || "");
+          const parts = [first, last].filter(Boolean);
+          const suggestion =
+            parts.length === 0 ? "" : parts.length === 1 ? parts[0] : `${parts[0]}.${parts[1]}`;
+          usernameInput.value = suggestion;
+          lastGeneratedUsername = suggestion;
+          updateEmail();
+        };
+
+        document.getElementById("first_name")?.addEventListener("input", updateUsernameIfNeeded);
+        document.getElementById("last_name")?.addEventListener("input", updateUsernameIfNeeded);
+
+        wireDatalist(
+          "job_role",
+          "clone-job-role-suggestions",
+          "/api/job-titles",
+          {{ job_roles.keys()|list|tojson }}
+        );
+        wireDatalist(
+          "user_ou",
+          "clone-ou-suggestions",
+          "/api/ous",
+          {{ ous|tojson }}
+        );
+        wireDatalist(
+          "company",
+          "clone-company-suggestions",
+          "/api/companies",
+          {{ companies|tojson }}
+        );
+        wireDatalist(
+          "office",
+          "clone-office-suggestions",
+          "/api/offices",
+          {{ offices|tojson }}
+        );
+        wireManagerAutocomplete();
+        updateUsernameIfNeeded();
+        if (!emailInput?.value) {
+          updateEmail();
+        }
+      });
+    </script>
   {% endif %}
 {% endblock %}

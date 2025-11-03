@@ -3,8 +3,8 @@
 roles:
   - name: Field Service Technician
     description: Front-line technician responsible for on-site service visits.
-    user_ou: OU=Field Services,OU=Employees,DC=example,DC=com
-    default_manager_dn: CN=Alex Johnson,OU=Management,DC=example,DC=com
+    user_ou: CN=Users,DC=amanomcgann,DC=com
+    default_manager_dn:
     attributes:
       title: Field Service Technician
       department: Field Services
