@@ -7,15 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 import yaml
-<<<<<<< ours
-<<<<<<< ours
-from ldap3 import ALL, LEVEL, MODIFY_REPLACE, SUBTREE, Connection, Server
-=======
 from ldap3 import ALL, BASE, LEVEL, MODIFY_REPLACE, SUBTREE, Connection, Server
->>>>>>> theirs
-=======
-from ldap3 import ALL, BASE, LEVEL, MODIFY_REPLACE, SUBTREE, Connection, Server
->>>>>>> theirs
 
 from .config import LDAPConfig
 from .models import Employee, JobRole
@@ -96,11 +88,6 @@ class MockDirectory:
                 break
         self._save()
 
-<<<<<<< ours
-<<<<<<< ours
-=======
-=======
->>>>>>> theirs
     def search_users(self, query: str, attributes: List[str]) -> List[Dict[str, Any]]:
         results: List[Dict[str, Any]] = []
         lowered = query.lower()
@@ -135,18 +122,13 @@ class MockDirectory:
                 return True
         return False
 
-<<<<<<< ours
->>>>>>> theirs
-=======
->>>>>>> theirs
-
 class ADClient:
     """Wrapper around ldap3 that exposes high-level AD operations."""
 
     def __init__(self, config: LDAPConfig):
         self.config = config
         self._mock_directory: Optional[MockDirectory] = None
-        self.connection: Optional[Connection]
+        self.connection: Optional[Connection] = None
 
         if config.server_uri.startswith("mock://"):
             data_file = config.mock_data_file
@@ -154,27 +136,12 @@ class ADClient:
             self.connection = None
         else:
             self.server = Server(config.server_uri, use_ssl=config.use_ssl, get_info=ALL)
-<<<<<<< ours
-<<<<<<< ours
             self.connection = Connection(
                 self.server,
                 user=config.user_dn,
                 password=config.password,
                 auto_bind=True,
             )
-=======
-=======
->>>>>>> theirs
-        self.connection = Connection(
-            self.server,
-            user=config.user_dn,
-            password=config.password,
-            auto_bind=True,
-        )
-<<<<<<< ours
->>>>>>> theirs
-=======
->>>>>>> theirs
 
     def close(self) -> None:
         if self.connection and self.connection.bound:
@@ -298,11 +265,6 @@ class ADClient:
         assert self.connection is not None
         self.connection.modify(user_dn, {"manager": [(MODIFY_REPLACE, [manager_dn])]})
 
-<<<<<<< ours
-<<<<<<< ours
-=======
-=======
->>>>>>> theirs
     # User discovery ------------------------------------------------------
     def search_users(
         self, query: str, attributes: Optional[List[str]] = None
@@ -369,22 +331,11 @@ class ADClient:
 
         assert self.connection is not None
         return bool(self.connection.delete(distinguished_name))
-
-<<<<<<< ours
->>>>>>> theirs
-=======
->>>>>>> theirs
     # Utilities -----------------------------------------------------------
     @staticmethod
     def _domain_from_dn(base_dn: str) -> str:
         parts = [segment.split("=")[1] for segment in base_dn.split(",") if segment.upper().startswith("DC=")]
         return ".".join(parts)
-
-<<<<<<< ours
-<<<<<<< ours
-=======
-=======
->>>>>>> theirs
     @staticmethod
     def _escape_filter_value(value: str) -> str:
         replacements = {
@@ -395,11 +346,6 @@ class ADClient:
             "\0": r"\\00",
         }
         return "".join(replacements.get(char, char) for char in value)
-
-<<<<<<< ours
->>>>>>> theirs
-=======
->>>>>>> theirs
 
 @contextlib.contextmanager
 def ad_client(config: LDAPConfig) -> Iterator[ADClient]:

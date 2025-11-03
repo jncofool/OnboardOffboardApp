@@ -212,14 +212,6 @@ def load_config(path: Optional[Path] = None) -> AppConfig:
     return AppConfig(ldap=ldap_config, sync=sync_config, storage=storage_config)
 
 
-<<<<<<< ours
-<<<<<<< ours
-__all__ = [
-    "AppConfig",
-    "ConfigurationError",
-=======
-=======
->>>>>>> theirs
 def config_to_dict(config: AppConfig) -> Dict[str, Any]:
     """Serialize an :class:`AppConfig` back to primitive types for persistence."""
 
@@ -265,21 +257,10 @@ __all__ = [
     "AppConfig",
     "ConfigurationError",
     "config_to_dict",
-<<<<<<< ours
->>>>>>> theirs
-=======
->>>>>>> theirs
     "ensure_default_config",
     "LDAPConfig",
     "SyncConfig",
     "StorageConfig",
-<<<<<<< ours
-<<<<<<< ours
-=======
     "save_config",
->>>>>>> theirs
-=======
-    "save_config",
->>>>>>> theirs
     "load_config",
 ]

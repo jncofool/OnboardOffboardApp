@@ -5,14 +5,6 @@ __all__ = [
     "ad_client",
     "storage",
     "models",
-<<<<<<< ours
-<<<<<<< ours
-=======
     "web",
     "sync",
->>>>>>> theirs
-=======
-    "web",
-    "sync",
->>>>>>> theirs
 ]
