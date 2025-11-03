@@ -7,7 +7,11 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional
 
 import yaml
+<<<<<<< ours
 from ldap3 import ALL, LEVEL, MODIFY_REPLACE, SUBTREE, Connection, Server
+=======
+from ldap3 import ALL, BASE, LEVEL, MODIFY_REPLACE, SUBTREE, Connection, Server
+>>>>>>> theirs
 
 from .config import LDAPConfig
 from .models import Employee, JobRole
@@ -88,6 +92,43 @@ class MockDirectory:
                 break
         self._save()
 
+<<<<<<< ours
+=======
+    def search_users(self, query: str, attributes: List[str]) -> List[Dict[str, Any]]:
+        results: List[Dict[str, Any]] = []
+        lowered = query.lower()
+        for user in self._data.get("users", []):
+            attrs = user.get("attributes", {})
+            haystack = " ".join(
+                str(attrs.get(key, "")) for key in ("displayName", "sAMAccountName", "mail")
+            ).lower()
+            if lowered in haystack:
+                record = {"distinguishedName": user.get("distinguished_name")}
+                for attribute in attributes:
+                    record[attribute] = attrs.get(attribute)
+                results.append(record)
+        return results
+
+    def get_user(self, distinguished_name: str, attributes: List[str]) -> Optional[Dict[str, Any]]:
+        for user in self._data.get("users", []):
+            if user.get("distinguished_name") == distinguished_name:
+                record = {"distinguishedName": distinguished_name}
+                attrs = user.get("attributes", {})
+                for attribute in attributes:
+                    record[attribute] = attrs.get(attribute)
+                return record
+        return None
+
+    def delete_user(self, distinguished_name: str) -> bool:
+        users = self._data.get("users", [])
+        for index, user in enumerate(users):
+            if user.get("distinguished_name") == distinguished_name:
+                users.pop(index)
+                self._save()
+                return True
+        return False
+
+>>>>>>> theirs
 
 class ADClient:
     """Wrapper around ldap3 that exposes high-level AD operations."""
@@ -103,12 +144,21 @@ class ADClient:
             self.connection = None
         else:
             self.server = Server(config.server_uri, use_ssl=config.use_ssl, get_info=ALL)
+<<<<<<< ours
             self.connection = Connection(
                 self.server,
                 user=config.user_dn,
                 password=config.password,
                 auto_bind=True,
             )
+=======
+        self.connection = Connection(
+            self.server,
+            user=config.user_dn,
+            password=config.password,
+            auto_bind=True,
+        )
+>>>>>>> theirs
 
     def close(self) -> None:
         if self.connection and self.connection.bound:
@@ -232,12 +282,96 @@ class ADClient:
         assert self.connection is not None
         self.connection.modify(user_dn, {"manager": [(MODIFY_REPLACE, [manager_dn])]})
 
+<<<<<<< ours
+=======
+    # User discovery ------------------------------------------------------
+    def search_users(
+        self, query: str, attributes: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        if not query:
+            return []
+
+        attribute_list = list({"displayName", "mail", "title", "sAMAccountName", *(attributes or [])})
+
+        if self._mock_directory:
+            return self._mock_directory.search_users(query, attribute_list)
+
+        assert self.connection is not None
+        escaped_query = self._escape_filter_value(query)
+        filter_str = (
+            f"(&"
+            f"(objectClass=user)"
+            f"(|(displayName=*{escaped_query}*)(sAMAccountName=*{escaped_query}*)(mail=*{escaped_query}*))"
+            f")"
+        )
+        self.connection.search(
+            search_base=self.config.base_dn,
+            search_filter=filter_str,
+            search_scope=SUBTREE,
+            attributes=attribute_list,
+        )
+
+        results: List[Dict[str, Any]] = []
+        for entry in self.connection.entries:
+            payload = {"distinguishedName": str(entry.entry_dn)}
+            for attribute in attribute_list:
+                if attribute in entry:
+                    payload[attribute] = str(entry[attribute])
+            results.append(payload)
+        return results
+
+    def get_user(
+        self, distinguished_name: str, attributes: Optional[List[str]] = None
+    ) -> Optional[Dict[str, Any]]:
+        attribute_list = list({"displayName", "mail", "title", "manager", *(attributes or [])})
+
+        if self._mock_directory:
+            return self._mock_directory.get_user(distinguished_name, attribute_list)
+
+        assert self.connection is not None
+        self.connection.search(
+            search_base=distinguished_name,
+            search_filter="(objectClass=user)",
+            search_scope=BASE,
+            attributes=attribute_list,
+        )
+        if not self.connection.entries:
+            return None
+        entry = self.connection.entries[0]
+        payload = {"distinguishedName": str(entry.entry_dn)}
+        for attribute in attribute_list:
+            if attribute in entry:
+                payload[attribute] = str(entry[attribute])
+        return payload
+
+    def delete_user(self, distinguished_name: str) -> bool:
+        if self._mock_directory:
+            return self._mock_directory.delete_user(distinguished_name)
+
+        assert self.connection is not None
+        return bool(self.connection.delete(distinguished_name))
+
+>>>>>>> theirs
     # Utilities -----------------------------------------------------------
     @staticmethod
     def _domain_from_dn(base_dn: str) -> str:
         parts = [segment.split("=")[1] for segment in base_dn.split(",") if segment.upper().startswith("DC=")]
         return ".".join(parts)
 
+<<<<<<< ours
+=======
+    @staticmethod
+    def _escape_filter_value(value: str) -> str:
+        replacements = {
+            "\\": r"\\5c",
+            "*": r"\\2a",
+            "(": r"\\28",
+            ")": r"\\29",
+            "\0": r"\\00",
+        }
+        return "".join(replacements.get(char, char) for char in value)
+
+>>>>>>> theirs
 
 @contextlib.contextmanager
 def ad_client(config: LDAPConfig) -> Iterator[ADClient]:

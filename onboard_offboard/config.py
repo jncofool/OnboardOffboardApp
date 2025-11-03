@@ -212,12 +212,64 @@ def load_config(path: Optional[Path] = None) -> AppConfig:
     return AppConfig(ldap=ldap_config, sync=sync_config, storage=storage_config)
 
 
+<<<<<<< ours
 __all__ = [
     "AppConfig",
     "ConfigurationError",
+=======
+def config_to_dict(config: AppConfig) -> Dict[str, Any]:
+    """Serialize an :class:`AppConfig` back to primitive types for persistence."""
+
+    return {
+        "ldap": {
+            "server_uri": config.ldap.server_uri,
+            "user_dn": config.ldap.user_dn,
+            "password": config.ldap.password,
+            "base_dn": config.ldap.base_dn,
+            "user_ou": config.ldap.user_ou,
+            "use_ssl": config.ldap.use_ssl,
+            "manager_search_filter": config.ldap.manager_search_filter,
+            "manager_attributes": list(config.ldap.manager_attributes),
+            **(
+                {"mock_data_file": str(config.ldap.mock_data_file)}
+                if config.ldap.mock_data_file
+                else {}
+            ),
+        },
+        "sync": {
+            "command": config.sync.command,
+            "shell": config.sync.shell,
+            "timeout": config.sync.timeout,
+        },
+        "storage": {
+            "job_roles_file": str(config.storage.job_roles_file),
+        },
+    }
+
+
+def save_config(config: AppConfig, path: Optional[Path] = None) -> Path:
+    """Persist the configuration to disk, returning the path that was written."""
+
+    target = _resolve_config_path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = config_to_dict(config)
+    with target.open("w", encoding="utf-8") as handle:
+        yaml.safe_dump(payload, handle, sort_keys=False, indent=2)
+    return target
+
+
+__all__ = [
+    "AppConfig",
+    "ConfigurationError",
+    "config_to_dict",
+>>>>>>> theirs
     "ensure_default_config",
     "LDAPConfig",
     "SyncConfig",
     "StorageConfig",
+<<<<<<< ours
+=======
+    "save_config",
+>>>>>>> theirs
     "load_config",
 ]

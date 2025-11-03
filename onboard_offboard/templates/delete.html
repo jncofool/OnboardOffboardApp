@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block title %}Offboard User · Onboard &amp; Offboard{% endblock %}
+{% block content %}
+  <h1>Offboard an Employee</h1>
+  <form method="get" class="field" action="{{ url_for('delete_user') }}">
+    <label for="query">Search Directory</label>
+    <div style="display:flex; gap:0.5rem;">
+      <input id="query" name="query" type="text" value="{{ query }}" placeholder="Search by name, username, or email" />
+      <button type="submit">Search</button>
+    </div>
+  </form>
+
+  {% if search_results %}
+    <h2>Results</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Username</th>
+          <th>Email</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for user in search_results %}
+          <tr>
+            <td>{{ user.get('displayName') }}</td>
+            <td>{{ user.get('sAMAccountName') }}</td>
+            <td>{{ user.get('mail') }}</td>
+            <td>
+              <form method="post" onsubmit="return confirm('Delete {{ user.get('displayName') or user.get('distinguishedName') }}? This cannot be undone.');">
+                <input type="hidden" name="user_dn" value="{{ user.get('distinguishedName') }}" />
+                <button type="submit">Delete &amp; Sync</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% elif query %}
+    <p>No users matched "{{ query }}".</p>
+  {% endif %}
+{% endblock %}
