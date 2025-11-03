@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Configuration · Onboard &amp; Offboard{% endblock %}
+{% block content %}
+  <h1>Directory Configuration</h1>
+  <p>Update the connection details and sync command used by the portal.</p>
+  <form method="post">
+    <section>
+      <h2>Active Directory</h2>
+      <div class="field">
+        <label for="server_uri">Server URI</label>
+        <input id="server_uri" name="server_uri" type="text" value="{{ config.ldap.server_uri }}" required />
+      </div>
+      <div class="field">
+        <label for="user_dn">Bind User DN</label>
+        <input id="user_dn" name="user_dn" type="text" value="{{ config.ldap.user_dn }}" required />
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password" value="{{ config.ldap.password }}" required />
+      </div>
+      <div class="field">
+        <label for="base_dn">Base DN</label>
+        <input id="base_dn" name="base_dn" type="text" value="{{ config.ldap.base_dn }}" required />
+      </div>
+      <div class="field">
+        <label for="user_ou">Default User OU</label>
+        <input id="user_ou" name="user_ou" type="text" value="{{ config.ldap.user_ou }}" required />
+      </div>
+      <div class="field">
+        <label><input type="checkbox" name="use_ssl" {% if config.ldap.use_ssl %}checked{% endif %} /> Use SSL</label>
+      </div>
+      <div class="field">
+        <label for="manager_search_filter">Manager Search Filter</label>
+        <input id="manager_search_filter" name="manager_search_filter" type="text" value="{{ config.ldap.manager_search_filter }}" />
+      </div>
+      <div class="field">
+        <label for="manager_attributes">Manager Attributes (comma separated)</label>
+        <input id="manager_attributes" name="manager_attributes" type="text" value="{{ config.ldap.manager_attributes | join(', ') }}" />
+      </div>
+      <div class="field">
+        <label for="mock_data_file">Mock Directory File (optional)</label>
+        <input id="mock_data_file" name="mock_data_file" type="text" value="{{ config.ldap.mock_data_file or '' }}" />
+      </div>
+    </section>
+
+    <section>
+      <h2>Sync Command</h2>
+      <div class="field">
+        <label for="sync_command">Command</label>
+        <input id="sync_command" name="sync_command" type="text" value="{{ config.sync.command }}" placeholder="Start-ADSyncSyncCycle -PolicyType Delta" />
+      </div>
+      <div class="field">
+        <label><input type="checkbox" name="sync_shell" {% if config.sync.shell %}checked{% endif %} /> Run command in shell</label>
+      </div>
+      <div class="field">
+        <label for="sync_timeout">Timeout (seconds)</label>
+        <input id="sync_timeout" name="sync_timeout" type="number" min="0" value="{{ config.sync.timeout }}" />
+      </div>
+    </section>
+
+    <section>
+      <h2>Storage</h2>
+      <div class="field">
+        <label for="job_roles_file">Job Roles File</label>
+        <input id="job_roles_file" name="job_roles_file" type="text" value="{{ config.storage.job_roles_file }}" />
+      </div>
+    </section>
+
+    <div class="field">
+      <button type="submit">Save Configuration</button>
+    </div>
+  </form>
+{% endblock %}

@@ -2,8 +2,11 @@
 from __future__ import annotations
 
 import json
+<<<<<<< ours
 import shlex
 import subprocess
+=======
+>>>>>>> theirs
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -13,6 +16,10 @@ from .ad_client import ADClient
 from .config import AppConfig, ConfigurationError, load_config
 from .models import Employee, JobRole
 from .storage import load_job_roles, save_job_roles
+<<<<<<< ours
+=======
+from .sync import run_sync_command
+>>>>>>> theirs
 
 app = typer.Typer(help="Manage onboarding workflows across Active Directory and Microsoft 365.")
 role_app = typer.Typer(help="Manage reusable job role templates.")
@@ -137,6 +144,7 @@ def show_tree(
     typer.echo(json.dumps(tree, indent=2))
 
 
+<<<<<<< ours
 def _run_sync(sync_command: str, shell: bool, timeout: int) -> None:
     typer.echo("Triggering directory sync...")
     try:
@@ -154,6 +162,8 @@ def _run_sync(sync_command: str, shell: bool, timeout: int) -> None:
         typer.echo("Sync command timed out.")
 
 
+=======
+>>>>>>> theirs
 @app.command("onboard")
 def onboard_user(
     first_name: str = typer.Argument(..., help="Employee first name."),
@@ -205,7 +215,15 @@ def onboard_user(
     typer.echo("User provisioned:")
     typer.echo(json.dumps(result, indent=2))
 
+<<<<<<< ours
     _run_sync(config.sync.command, config.sync.shell, config.sync.timeout)
+=======
+    typer.echo("Triggering directory sync...")
+    try:
+        run_sync_command(config.sync)
+    except RuntimeError as exc:
+        typer.echo(str(exc))
+>>>>>>> theirs
 
 
 def run():

@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Onboard Employee · Onboard &amp; Offboard{% endblock %}
+{% block content %}
+  <h1>Onboard a New Employee</h1>
+  <form method="post">
+    <div class="field">
+      <label for="first_name">First Name</label>
+      <input id="first_name" name="first_name" type="text" value="{{ request.form.first_name or '' }}" required />
+    </div>
+    <div class="field">
+      <label for="last_name">Last Name</label>
+      <input id="last_name" name="last_name" type="text" value="{{ request.form.last_name or '' }}" required />
+    </div>
+    <div class="field">
+      <label for="username">Username (sAMAccountName)</label>
+      <input id="username" name="username" type="text" value="{{ request.form.username or '' }}" required />
+    </div>
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" value="{{ request.form.email or '' }}" required />
+    </div>
+    <div class="field">
+      <label for="job_role">Job Role</label>
+      <select id="job_role" name="job_role" required>
+        <option value="" disabled {% if not request.form.job_role %}selected{% endif %}>Select a role</option>
+        {% for name, role in job_roles.items() %}
+          <option value="{{ name }}" {% if request.form.job_role == name %}selected{% endif %}>{{ name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="password">Temporary Password (optional)</label>
+      <input id="password" name="password" type="password" />
+    </div>
+    <div class="field">
+      <label for="manager_dn">Manager</label>
+      <select id="manager_dn" name="manager_dn" required>
+        <option value="" {% if not request.form.manager_dn %}selected{% endif %}>Use job role default</option>
+        {% for manager in managers %}
+          {% set dn = manager.get('distinguishedName') %}
+          <option value="{{ dn }}" {% if request.form.manager_dn == dn %}selected{% endif %}>
+            {{ manager.get('displayName') or dn }} ({{ manager.get('title') or 'No title' }})
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="user_ou">Organizational Unit</label>
+      <select id="user_ou" name="user_ou">
+        <option value="">Use job role default</option>
+        {% for ou in ous %}
+          <option value="{{ ou }}" {% if request.form.user_ou == ou %}selected{% endif %}>{{ ou }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="field">
+      <label for="attributes">Additional Attributes (key=value per line)</label>
+      <textarea id="attributes" name="attributes">{{ request.form.attributes or '' }}</textarea>
+    </div>
+    <div class="field">
+      <button type="submit">Create Account &amp; Sync</button>
+    </div>
+  </form>
+{% endblock %}

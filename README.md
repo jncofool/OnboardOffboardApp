@@ -1,5 +1,6 @@
 # OnboardOffboardApp
 
+<<<<<<< ours
 A command-line toolkit for orchestrating onboarding and offboarding workflows in a hybrid Active Directory and Microsoft 365 environment. The initial milestone focuses on configurable job roles, manager selection, and directory synchronization.
 
 ## Features
@@ -8,6 +9,17 @@ A command-line toolkit for orchestrating onboarding and offboarding workflows in
 - Manage reusable job role templates that define default OUs, managers, and attribute payloads.
 - Explore potential managers and the Active Directory OU tree directly from the command line.
 - Provision new employees into AD and trigger a configurable directory sync command (for example Azure AD Connect).
+=======
+A browser-based onboarding and offboarding portal (with a companion CLI) for hybrid Active Directory and Microsoft 365 environments. The application keeps every setting configurable so you can point it at mock data for local demos or your production tenant for day-to-day operations.
+
+## Features
+
+- Configuration-driven (YAML file and/or environment variables) connection to Active Directory and sync tooling.
+- Responsive web UI to onboard, clone, and offboard users without command-line parameters.
+- Manage reusable job role templates that define default OUs, managers, and attribute payloads.
+- Explore potential managers and the Active Directory OU tree via the portal or CLI.
+- Provision new employees into AD, clone from existing accounts, and trigger a configurable directory sync command (for example Azure AD Connect).
+>>>>>>> theirs
 
 ## Prerequisites
 
@@ -63,9 +75,40 @@ export ONBOARD_SYNC__COMMAND="powershell.exe -Command \"Start-ADSyncSyncCycle -P
 |  | `timeout` | Seconds to wait for the sync command to complete. |
 | `storage` | `job_roles_file` | Path to the YAML file containing job role definitions. |
 
+<<<<<<< ours
 ## Usage
 
 All commands are executed with `python -m onboard_offboard`.
+=======
+## Web portal
+
+Launch the portal with:
+
+```bash
+python -m onboard_offboard.web
+```
+
+The server listens on `http://127.0.0.1:5000/` by default. Use the navigation bar to:
+
+- Update the Active Directory connection, sync command, and storage locations from the **Configuration** page.
+- Onboard new staff by filling in user details, selecting a job role, choosing an OU/manager from live directory data, and optionally supplying additional attributes.
+- Clone an existing user—search the directory, pick a template account, adjust the prefilled values, and create the new profile.
+- Offboard users by searching the directory, selecting the account, and deleting it. Each action triggers the configured sync command so Microsoft 365 stays in step.
+
+Environment variables let you customise the listener:
+
+```bash
+export ONBOARD_WEB_HOST="0.0.0.0"   # expose beyond localhost
+export ONBOARD_WEB_PORT=8080          # change the port
+export ONBOARD_WEB_DEBUG=1            # enable Flask debug mode
+```
+
+> The web UI respects the same `config/settings.yaml` file as the CLI, so you can manage everything from the browser once the configuration is in place.
+
+## Command-line usage
+
+All CLI commands are executed with `python -m onboard_offboard`.
+>>>>>>> theirs
 
 ### Manage job roles
 
