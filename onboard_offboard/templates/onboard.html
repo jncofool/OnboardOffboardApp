@@ -291,8 +291,6 @@
       const domain = {{ (email_domain or '')|tojson }};
       const emailInput = document.getElementById("email");
       const usernameInput = document.getElementById("username");
-      const generatedUsername = {{ generated_username|tojson }};
-
       const updateEmail = () => {
         if (!domain || !emailInput || !usernameInput) {
           return;
@@ -301,44 +299,45 @@
         emailInput.value = username ? `${username}@${domain}` : "";
       };
 
-      let lastGeneratedUsername = usernameInput ? usernameInput.value : "";
       let usernameManuallyEdited = false;
       if (usernameInput) {
-        if (usernameInput.value && usernameInput.value !== generatedUsername) {
-          usernameManuallyEdited = true;
-        } else {
-          lastGeneratedUsername = usernameInput.value || generatedUsername || "";
-        }
+        usernameManuallyEdited = usernameInput.dataset.manual === "1";
         usernameInput.addEventListener("input", () => {
-          if (usernameInput.value !== lastGeneratedUsername) {
-            usernameManuallyEdited = true;
-          }
+          usernameManuallyEdited = true;
+          usernameInput.dataset.manual = "1";
           updateEmail();
         });
       }
 
-      const slugify = (value) => {
+      const sanitizeForUsername = (value) => {
         if (!value) {
           return "";
         }
         return value
           .normalize("NFD")
           .replace(/[\u0300-\u036f]/g, "")
-          .toLowerCase()
-          .replace(/[^a-z0-9]/g, "");
+          .replace(/[^a-z0-9]/gi, "")
+          .toLowerCase();
+      };
+
+      const formatUsernamePart = (value) => {
+        const slug = sanitizeForUsername(value);
+        if (!slug) {
+          return "";
+        }
+        return slug.charAt(0).toUpperCase() + slug.slice(1);
       };
 
       const updateUsernameIfNeeded = () => {
         if (!usernameInput || usernameManuallyEdited) {
           return;
         }
-        const first = slugify(document.getElementById("first_name")?.value || "");
-        const last = slugify(document.getElementById("last_name")?.value || "");
+        const first = formatUsernamePart(document.getElementById("first_name")?.value || "");
+        const last = formatUsernamePart(document.getElementById("last_name")?.value || "");
         const parts = [first, last].filter(Boolean);
         const suggestion =
           parts.length === 0 ? "" : parts.length === 1 ? parts[0] : `${parts[0]}.${parts[1]}`;
         usernameInput.value = suggestion;
-        lastGeneratedUsername = suggestion;
         updateEmail();
       };
 

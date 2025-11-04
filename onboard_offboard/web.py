@@ -593,6 +593,9 @@ def register_routes(app: Flask) -> None:
             request.form.get("username", "").strip() or generated_username,
             email_domain,
         )
+        prefilled_job_role = request.form.get("job_role")
+        if not prefilled_job_role and selected_user:
+            prefilled_job_role = (selected_user.get("title") or "").strip()
 
         return render_template(
             "clone.html",
@@ -610,6 +613,7 @@ def register_routes(app: Flask) -> None:
             email_domain=email_domain,
             generated_email=generated_email,
             generated_username=generated_username,
+            prefilled_job_role=prefilled_job_role,
         )
 
     @app.route("/delete", methods=["GET", "POST"])
@@ -845,10 +849,13 @@ def _slugify_name(value: str) -> str:
 
 
 def _derive_username(first_name: str, last_name: str) -> str:
-    parts = [
-        _slugify_name(first_name),
-        _slugify_name(last_name),
-    ]
+    def _format_part(raw: str) -> str:
+        slug = _slugify_name(raw)
+        if not slug:
+            return ""
+        return slug[0].upper() + slug[1:]
+
+    parts = [_format_part(first_name), _format_part(last_name)]
     filtered = [part for part in parts if part]
     if not filtered:
         return ""
