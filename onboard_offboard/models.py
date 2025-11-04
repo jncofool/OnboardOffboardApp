@@ -5,6 +5,15 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 
+def normalize_person_name(raw: str) -> str:
+    stripped = (raw or "").strip()
+    if not stripped:
+        return ""
+
+    def _capitalize_segment(segment: str) -> str:
+        return "-".join(part.capitalize() for part in segment.split("-"))
+
+    return " ".join(_capitalize_segment(part) for part in stripped.split())
 @dataclass
 class JobRole:
     """Represents a reusable onboarding template for a specific job role."""
@@ -47,6 +56,10 @@ class Employee:
     manager_dn: Optional[str] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        self.first_name = normalize_person_name(self.first_name)
+        self.last_name = normalize_person_name(self.last_name)
+
     @property
     def display_name(self) -> str:
         return f"{self.first_name} {self.last_name}".strip()
@@ -56,4 +69,4 @@ class Employee:
         return f"CN={self.display_name},{container}"
 
 
-__all__ = ["Employee", "JobRole"]
+__all__ = ["Employee", "JobRole", "normalize_person_name"]

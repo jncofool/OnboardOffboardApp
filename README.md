@@ -64,7 +64,7 @@ python -m onboard_offboard.web
 The server listens on `http://127.0.0.1:5000/` by default. Use the navigation bar to:
 - Update the Active Directory connection, sync command, and storage locations from the **Configuration** page.
 - Onboard new staff by filling in user details, selecting a job role, choosing an OU/manager from live directory data, and optionally supplying additional attributes.
-- Clone an existing user—search the directory, pick a template account, adjust the prefilled values, and create the new profile.
+- Clone an existing userâ€”search the directory, pick a template account, adjust the prefilled values, and create the new profile.
 - Offboard users by searching the directory, selecting the account, and deleting it. Each action triggers the configured sync command so Microsoft 365 stays in step.
 
 Environment variables let you customise the listener:

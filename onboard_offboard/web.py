@@ -20,7 +20,7 @@ from .config import (
     load_config,
     save_config,
 )
-from .models import Employee, JobRole
+from .models import Employee, JobRole, normalize_person_name
 from .storage import load_job_roles
 from .sync import run_sync_command
 
@@ -113,8 +113,10 @@ def register_routes(app: Flask) -> None:
 
         if request.method == "POST":
             try:
-                first_name = request.form.get("first_name", "").strip()
-                last_name = request.form.get("last_name", "").strip()
+                raw_first_name = request.form.get("first_name", "")
+                raw_last_name = request.form.get("last_name", "")
+                first_name = normalize_person_name(raw_first_name)
+                last_name = normalize_person_name(raw_last_name)
                 username = request.form.get("username", "").strip()
                 if not username:
                     username = _derive_username(first_name, last_name)
@@ -188,8 +190,8 @@ def register_routes(app: Flask) -> None:
                 flash(f"Unable to onboard user: {exc}", "error")
 
         generated_username = _derive_username(
-            request.form.get("first_name", "").strip(),
-            request.form.get("last_name", "").strip(),
+            normalize_person_name(request.form.get("first_name", "")),
+            normalize_person_name(request.form.get("last_name", "")),
         )
         generated_email = _derive_email(
             request.form.get("username", "").strip() or generated_username,
@@ -497,8 +499,10 @@ def register_routes(app: Flask) -> None:
 
         if request.method == "POST":
             try:
-                first_name = request.form.get("first_name", "").strip()
-                last_name = request.form.get("last_name", "").strip()
+                raw_first_name = request.form.get("first_name", "")
+                raw_last_name = request.form.get("last_name", "")
+                first_name = normalize_person_name(raw_first_name)
+                last_name = normalize_person_name(raw_last_name)
                 username = request.form.get("username", "").strip()
                 if not username:
                     username = _derive_username(first_name, last_name)
@@ -582,8 +586,8 @@ def register_routes(app: Flask) -> None:
         default_manager_label = template_manager_display
         default_ou = _ou_from_dn(selected_user.get("distinguishedName")) if selected_user else None
         generated_username = _derive_username(
-            request.form.get("first_name", "").strip(),
-            request.form.get("last_name", "").strip(),
+            normalize_person_name(request.form.get("first_name", "")),
+            normalize_person_name(request.form.get("last_name", "")),
         )
         generated_email = _derive_email(
             request.form.get("username", "").strip() or generated_username,
