@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Onboard &amp; Offboard{% endblock %}
+{% block content %}
+  <h1>Welcome</h1>
+  <p>
+    Use the navigation to onboard new employees, clone an existing account, or offboard departing staff.
+    All actions use the currently active configuration loaded from <code>config/settings.yaml</code>.
+  </p>
+
+  <h2>Quick Actions</h2>
+  <div class="actions">
+    <a class="button" href="{{ url_for('onboard') }}">Onboard Employee</a>
+    <a class="button secondary" href="{{ url_for('clone_user') }}">Clone Existing User</a>
+    <a class="button secondary" href="{{ url_for('delete_user') }}">Offboard Employee</a>
+  </div>
+
+  <h2 style="margin-top: 2rem;">Current Directory Settings</h2>
+  <table>
+    <tr>
+      <th>Server</th>
+      <td>{{ app_config.ldap.server_uri }}</td>
+    </tr>
+    <tr>
+      <th>Base DN</th>
+      <td>{{ app_config.ldap.base_dn }}</td>
+    </tr>
+    <tr>
+      <th>Default User OU</th>
+      <td>{{ app_config.ldap.user_ou }}</td>
+    </tr>
+    <tr>
+      <th>Sync Command</th>
+      <td>{{ app_config.sync.command or 'Not configured' }}</td>
+    </tr>
+  </table>
+
+  <h2 style="margin-top: 2rem;">Available Job Roles</h2>
+  {% if job_roles %}
+    <table>
+      <thead>
+        <tr>
+          <th>Role</th>
+          <th>Description</th>
+          <th>OU</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for role in job_roles.values() %}
+          <tr>
+            <td>{{ role.name }}</td>
+            <td>{{ role.description or '—' }}</td>
+            <td>{{ role.user_ou or app_config.ldap.user_ou }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  {% else %}
+    <p>No job roles have been configured yet. Visit the <a href="{{ url_for('edit_config') }}">configuration</a> page to connect a directory and then add roles via the YAML file.</p>
+  {% endif %}
+{% endblock %}

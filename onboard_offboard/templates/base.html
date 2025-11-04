@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{% block title %}Onboard &amp; Offboard{% endblock %}</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f4f4f7;
+        --card: #ffffff;
+        --text: #222;
+        --accent: #0a6efd;
+        --border: #dcdce0;
+      }
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: var(--bg);
+        color: var(--text);
+        min-height: 100vh;
+      }
+      header {
+        background: var(--card);
+        border-bottom: 1px solid var(--border);
+        padding: 1.25rem 2rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        position: sticky;
+        top: 0;
+        z-index: 10;
+      }
+      header nav a {
+        margin-right: 1rem;
+        text-decoration: none;
+        color: var(--accent);
+        font-weight: 600;
+      }
+      main {
+        padding: 2rem;
+        max-width: 960px;
+        margin: 0 auto;
+      }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 1.75rem;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+      }
+      form .field {
+        margin-bottom: 1.25rem;
+      }
+      label {
+        display: block;
+        font-size: 0.95rem;
+        font-weight: 600;
+        margin-bottom: 0.35rem;
+      }
+      input[type="text"],
+      input[type="email"],
+      input[type="password"],
+      textarea,
+      select {
+        width: 100%;
+        padding: 0.65rem 0.75rem;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        font-size: 1rem;
+        box-sizing: border-box;
+      }
+      textarea {
+        min-height: 120px;
+      }
+      button,
+      input[type="submit"],
+      .button {
+        background: var(--accent);
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        padding: 0.65rem 1.2rem;
+        font-size: 1rem;
+        cursor: pointer;
+        text-decoration: none;
+        display: inline-block;
+      }
+      .button.secondary {
+        background: transparent;
+        color: var(--accent);
+        border: 1px solid var(--accent);
+      }
+      .flash {
+        margin-bottom: 1rem;
+        padding: 0.75rem 1rem;
+        border-radius: 8px;
+      }
+      .flash.success {
+        background: rgba(25, 135, 84, 0.1);
+        color: #155724;
+        border: 1px solid rgba(25, 135, 84, 0.2);
+      }
+      .flash.error {
+        background: rgba(220, 53, 69, 0.1);
+        color: #842029;
+        border: 1px solid rgba(220, 53, 69, 0.2);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      th, td {
+        text-align: left;
+        padding: 0.6rem 0.75rem;
+        border-bottom: 1px solid var(--border);
+      }
+      .actions {
+        display: flex;
+        gap: 0.5rem;
+      }
+      .hint {
+        margin-top: 0.35rem;
+        font-size: 0.85rem;
+        color: #6c757d;
+      }
+      .inline-button {
+        margin-top: 0.5rem;
+        background: transparent;
+        color: var(--accent);
+        border: 1px solid var(--accent);
+        border-radius: 6px;
+        padding: 0.4rem 0.75rem;
+        font-size: 0.9rem;
+        cursor: pointer;
+      }
+      .inline-button:hover {
+        background: rgba(10, 110, 253, 0.08);
+      }
+      .autocomplete {
+        position: relative;
+      }
+      .autocomplete-results {
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        right: 0;
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        max-height: 220px;
+        overflow-y: auto;
+        box-shadow: 0 12px 24px rgba(15, 23, 42, 0.12);
+        z-index: 25;
+      }
+      .autocomplete-item {
+        padding: 0.5rem 0.75rem;
+        cursor: pointer;
+      }
+      .autocomplete-item:hover {
+        background: rgba(10, 110, 253, 0.1);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <strong>Onboarding &amp; Offboarding Portal</strong>
+      </div>
+      <nav>
+        <a href="{{ url_for('index') }}">Dashboard</a>
+        <a href="{{ url_for('onboard') }}">Onboard</a>
+        <a href="{{ url_for('clone_user') }}">Clone</a>
+        <a href="{{ url_for('delete_user') }}">Offboard</a>
+        <a href="{{ url_for('edit_config') }}">Configuration</a>
+      </nav>
+    </header>
+    <main>
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="flash {{ category }}">{{ message }}</div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+      <div class="card">
+        {% block content %}{% endblock %}
+      </div>
+    </main>
+  </body>
+</html>

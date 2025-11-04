@@ -1,0 +1,34 @@
+managers:
+- distinguishedName: CN=Alex Johnson,OU=Management,DC=example,DC=com
+  displayName: Alex Johnson
+  mail: alex.johnson@example.com
+  title: Director of Field Services
+- distinguishedName: CN=Jamie Rivera,OU=Management,DC=example,DC=com
+  displayName: Jamie Rivera
+  mail: jamie.rivera@example.com
+  title: Senior Operations Manager
+tree:
+  name: DC=example,DC=com
+  children:
+  - name: OU=Employees,DC=example,DC=com
+    children:
+    - name: OU=Field Services,OU=Employees,DC=example,DC=com
+      children: []
+    - name: OU=Corporate,OU=Employees,DC=example,DC=com
+      children: []
+  - name: OU=Contractors,DC=example,DC=com
+    children: []
+users:
+- distinguished_name: CN=Mark Daneshvar,Amano Mcgann
+  attributes:
+    givenName: Mark
+    sn: Daneshvar
+    displayName: Mark Daneshvar
+    userPrincipalName: mark.daneshvar@example.com
+    sAMAccountName: mark.daneshvar
+    mail: mark.daneshvar@example.com
+    title: Field Service Technician
+    department: Field Services
+    telephoneNumber: '16512109176'
+    manager: CN=Alex Johnson,OU=Management,DC=example,DC=com
+    userAccountControl: 512

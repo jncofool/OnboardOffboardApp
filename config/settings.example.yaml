@@ -1,0 +1,22 @@
+# Copy this file to config/settings.yaml and update the values to match your environment.
+ldap:
+  server_uri: mock://demo
+  user_dn: CN=svc_onboarding,OU=Service Accounts,DC=example,DC=com
+  password: "${ONBOARD_LDAP_PASSWORD:-change-me}"
+  base_dn: DC=example,DC=com
+  user_ou: OU=Employees,DC=example,DC=com
+  use_ssl: true
+  manager_search_filter: "(&(objectClass=user)(|(title=Manager)(title=Director)))"
+  manager_attributes:
+    - displayName
+    - mail
+    - title
+  mock_data_file: data/mock_directory.yaml
+
+sync:
+  command: echo "Simulated directory sync"
+  shell: true
+  timeout: 180
+
+storage:
+  job_roles_file: data/job_roles.yaml
