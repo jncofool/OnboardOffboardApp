@@ -18,6 +18,7 @@
         name="username"
         type="text"
         value="{{ request.form.username or generated_username or '' }}"
+        data-manual="{{ '1' if request.form.username else '0' }}"
         required
         autocomplete="off"
       />
@@ -41,6 +42,7 @@
         type="tel"
         value="{{ request.form.telephone_number or '' }}"
         placeholder="+16125551234"
+        autocomplete="off"
       />
     </div>
     <div class="field">
@@ -51,6 +53,7 @@
         type="tel"
         value="{{ request.form.mobile_number or '' }}"
         placeholder="+16125551234"
+        autocomplete="off"
       />
     </div>
     <div class="field">
@@ -291,6 +294,30 @@
       const domain = {{ (email_domain or '')|tojson }};
       const emailInput = document.getElementById("email");
       const usernameInput = document.getElementById("username");
+      const firstNameInput = document.getElementById("first_name");
+      const lastNameInput = document.getElementById("last_name");
+
+      const formatPersonName = (value) =>
+        (value || "")
+          .toLowerCase()
+          .replace(/(^|[\s\-'])([a-z])/g, (match, separator, char) => `${separator}${char.toUpperCase()}`);
+
+      const applyPersonNameFormatting = (input) => {
+        if (!input) {
+          return;
+        }
+        const original = input.value;
+        const formatted = formatPersonName(original);
+        if (formatted !== original) {
+          const start = input.selectionStart;
+          const end = input.selectionEnd;
+          input.value = formatted;
+          if (typeof start === "number" && typeof end === "number") {
+            input.setSelectionRange(start, end);
+          }
+        }
+      };
+
       const updateEmail = () => {
         if (!domain || !emailInput || !usernameInput) {
           return;
@@ -332,8 +359,8 @@
         if (!usernameInput || usernameManuallyEdited) {
           return;
         }
-        const first = formatUsernamePart(document.getElementById("first_name")?.value || "");
-        const last = formatUsernamePart(document.getElementById("last_name")?.value || "");
+        const first = formatUsernamePart(firstNameInput?.value || "");
+        const last = formatUsernamePart(lastNameInput?.value || "");
         const parts = [first, last].filter(Boolean);
         const suggestion =
           parts.length === 0 ? "" : parts.length === 1 ? parts[0] : `${parts[0]}.${parts[1]}`;
@@ -341,12 +368,16 @@
         updateEmail();
       };
 
-      document.getElementById("first_name")?.addEventListener("input", () => {
+      firstNameInput?.addEventListener("input", () => {
+        applyPersonNameFormatting(firstNameInput);
         updateUsernameIfNeeded();
       });
-      document.getElementById("last_name")?.addEventListener("input", () => {
+      lastNameInput?.addEventListener("input", () => {
+        applyPersonNameFormatting(lastNameInput);
         updateUsernameIfNeeded();
       });
+      firstNameInput?.addEventListener("blur", () => applyPersonNameFormatting(firstNameInput));
+      lastNameInput?.addEventListener("blur", () => applyPersonNameFormatting(lastNameInput));
 
       wireDatalist(
         "job_role",
@@ -373,6 +404,8 @@
         {{ offices|tojson }}
       );
       wireManagerAutocomplete();
+      applyPersonNameFormatting(firstNameInput);
+      applyPersonNameFormatting(lastNameInput);
       updateUsernameIfNeeded();
       if (!emailInput?.value) {
         updateEmail();
