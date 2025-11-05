@@ -5,7 +5,7 @@ import os
 import re
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 import unicodedata
 from urllib.parse import unquote
 
@@ -138,6 +138,22 @@ def register_routes(app: Flask) -> None:
                 office_name = request.form.get("office", "").strip()
                 attributes = _parse_attributes(request.form.get("attributes", ""))
                 selected_groups = _dedupe_preserve(request.form.getlist("groups"))
+                assignable_groups, skipped_groups = _filter_assignable_groups(selected_groups, config)
+                if skipped_groups:
+                    flash(
+                        "Skipped groups outside the managed scope: "
+                        + ", ".join(skipped_groups),
+                        "warning",
+                    )
+                selected_groups = assignable_groups
+                assignable_groups, skipped_groups = _filter_assignable_groups(selected_groups, config)
+                if skipped_groups:
+                    flash(
+                        "Skipped groups outside the managed scope: "
+                        + ", ".join(skipped_groups),
+                        "warning",
+                    )
+                selected_groups = assignable_groups
 
                 if not all([first_name, last_name, username, email, role_name]):
                     raise ValueError("All fields except password and attributes are required.")
@@ -636,6 +652,14 @@ def register_routes(app: Flask) -> None:
         email_domain = _email_domain_from_config(config)
         if not selected_groups and template_groups:
             selected_groups = _dedupe_preserve(template_groups)
+            filtered_groups, skipped_defaults = _filter_assignable_groups(selected_groups, config)
+            if skipped_defaults:
+                flash(
+                    "Skipped template groups outside the managed scope: "
+                    + ", ".join(skipped_defaults),
+                    "warning",
+                )
+            selected_groups = filtered_groups
 
         if request.method == "POST":
             try:
@@ -1030,6 +1054,22 @@ def _dedupe_preserve(values: Iterable[str]) -> List[str]:
             seen.add(value)
             result.append(value)
     return result
+
+
+def _filter_assignable_groups(groups: Iterable[str], config: AppConfig) -> Tuple[List[str], List[str]]:
+    normalized = _dedupe_preserve((group or "").strip() for group in groups)
+    base = (config.ldap.group_search_base or "").lower()
+    if not base:
+        return normalized, []
+
+    assignable: List[str] = []
+    skipped: List[str] = []
+    for group_dn in normalized:
+        if group_dn.lower().endswith(base):
+            assignable.append(group_dn)
+        else:
+            skipped.append(group_dn)
+    return assignable, skipped
 
 
 def _group_display_name(distinguished_name: str) -> str:

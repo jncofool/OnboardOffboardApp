@@ -409,12 +409,21 @@ class ADClient:
             if dn in seen:
                 continue
             seen.add(dn)
+
+            def _single_value(attr: str) -> str:
+                if attr not in entry:
+                    return ""
+                value = entry[attr].value
+                if isinstance(value, (list, tuple)):
+                    return value[0] if value else ""
+                return str(value) if value is not None else ""
+
             groups.append(
                 {
-                    "name": str(entry.get("cn", dn)),
+                    "name": _single_value("cn") or dn,
                     "distinguishedName": dn,
-                    "sAMAccountName": str(entry.get("sAMAccountName") or ""),
-                    "description": str(entry.get("description") or ""),
+                    "sAMAccountName": _single_value("sAMAccountName") or None,
+                    "description": _single_value("description") or None,
                 }
             )
             if len(groups) >= limit:

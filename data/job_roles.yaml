@@ -6,4 +6,6 @@ roles:
   attributes:
     department: Field Services
     title: Field Service Technician
-  groups: []
+  groups:
+  - CN=SG_GPSSRSADMIN,OU=User Groups,DC=amanomcgann,DC=com
+  - CN=SG_GPEXCELUSERS,OU=User Groups,DC=amanomcgann,DC=com
