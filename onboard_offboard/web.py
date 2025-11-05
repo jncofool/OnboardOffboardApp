@@ -3,10 +3,13 @@ from __future__ import annotations
 
 import os
 import re
+import threading
+import time
+import unicodedata
 from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-import unicodedata
 from urllib.parse import unquote
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
@@ -31,10 +34,14 @@ from .m365_client import (
     M365ClientError,
     M365ConfigurationError,
 )
+from .license_jobs import LicenseJob, LicenseJobStore
 
 
 _TEMPLATE_FOLDER = Path(__file__).resolve().parent / "templates"
 _DEFAULT_ATTRIBUTE_KEYS = ("title", "department", "company", "physicalDeliveryOfficeName", "employeeID")
+_LICENSE_WORKER_INTERVAL = 30
+_LICENSE_INITIAL_DELAY_SECONDS = 90
+_LICENSE_RETRY_SCHEDULE = (60, 120, 300, 600, 900)
 
 
 def create_app(config_path: Optional[Path | str] = None) -> Flask:
@@ -54,6 +61,8 @@ def create_app(config_path: Optional[Path | str] = None) -> Flask:
 
 def register_routes(app: Flask) -> None:
     """Attach all web routes to the provided Flask app."""
+
+    _ensure_license_worker(app)
 
     @app.context_processor
     def inject_globals() -> Dict[str, Any]:
@@ -102,7 +111,12 @@ def register_routes(app: Flask) -> None:
                     timeout=int(request.form.get("sync_timeout", config.sync.timeout or 120)),
                 )
                 storage = StorageConfig(
-                    job_roles_file=Path(request.form.get("job_roles_file", config.storage.job_roles_file)).expanduser(),
+                    job_roles_file=Path(
+                        request.form.get("job_roles_file", config.storage.job_roles_file)
+                    ).expanduser(),
+                    license_jobs_file=Path(
+                        request.form.get("license_jobs_file", config.storage.license_jobs_file)
+                    ).expanduser(),
                 )
 
                 current_m365 = getattr(config, "m365", M365Config())
@@ -144,11 +158,13 @@ def register_routes(app: Flask) -> None:
 
         roles_json = [_serialize_role(role) for role in roles.values()]
         m365_status = _build_m365_status(app, config)
+        job_titles = _preload_job_titles(config, roles)
         return render_template(
             "config.html",
             config=config,
             roles_json=roles_json,
             m365_status=m365_status,
+            job_titles=job_titles,
         )
 
     @app.route("/onboard", methods=["GET", "POST"])
@@ -181,7 +197,7 @@ def register_routes(app: Flask) -> None:
                 if not username:
                     username = _derive_username(first_name, last_name)
                 email = _derive_email(username, email_domain) or request.form.get("email", "").strip()
-                role_name = request.form.get("job_role", "")
+                role_name = request.form.get("job_role", "").strip()
                 password = request.form.get("password", "") or None
                 manager_search = request.form.get("manager_search", "").strip()
                 manager_dn = request.form.get("manager_dn") or None
@@ -271,9 +287,35 @@ def register_routes(app: Flask) -> None:
                 with ADClient(config.ldap) as client:
                     result = client.create_user(employee, job_role, password=password)
 
+                try:
+                    seed_status = _auto_seed_job_role(
+                        config,
+                        roles,
+                        role_name,
+                        user_ou=job_role.user_ou or chosen_ou or config.ldap.user_ou,
+                        default_manager_dn=effective_manager,
+                        attributes=attributes,
+                        groups=selected_groups,
+                        license_sku_id=license_sku,
+                        disabled_service_plans=disabled_plans_form,
+                    )
+                    if seed_status == "created":
+                        flash(f"Saved job role template '{role_name}' for future use.", "info")
+                except Exception as exc:  # pragma: no cover - persistence errors should not block onboarding
+                    flash(f"User created but job role defaults could not be stored: {exc}", "warning")
+
                 if license_sku:
                     result["license_sku_id"] = license_sku
                     result["disabled_service_plans"] = disabled_plans_form
+
+                queued_license = _enqueue_license_job(
+                    app, config, email, license_sku, disabled_plans_form
+                )
+                if queued_license:
+                    flash(
+                        "Microsoft 365 license assignment queued; it will apply shortly.",
+                        "info",
+                    )
 
                 _trigger_sync(config)
                 flash(
@@ -292,6 +334,7 @@ def register_routes(app: Flask) -> None:
             request.form.get("username", "").strip() or generated_username,
             email_domain,
         )
+        job_titles = _preload_job_titles(config, roles)
         return render_template(
             "onboard.html",
             managers=managers,
@@ -304,6 +347,7 @@ def register_routes(app: Flask) -> None:
             selected_groups=selected_groups,
             role_groups=role_groups,
             job_roles=roles,
+            job_titles=job_titles,
             role_license_defaults=role_license_defaults,
             selected_license=selected_license,
             selected_disabled_plans=selected_disabled_plans,
@@ -782,6 +826,54 @@ def register_routes(app: Flask) -> None:
             except Exception as exc:
                 flash(f"Unable to load selected user: {exc}", "error")
 
+        if selected_user and m365_status.get("configured"):
+            try:
+                m365_client = _get_m365_client(app, config)
+                if m365_client:
+                    lookup = (
+                        (selected_user.get("userPrincipalName") or "").strip()
+                        or (selected_user.get("mail") or "").strip()
+                    )
+                    graph_user = (
+                        m365_client.find_user(
+                            lookup,
+                            select="id,userPrincipalName,assignedLicenses",
+                        )
+                        if lookup
+                        else None
+                    )
+                    if graph_user:
+                        assigned = [
+                            entry
+                            for entry in graph_user.get("assignedLicenses", [])
+                            if entry.get("skuId")
+                        ]
+                        if assigned:
+                            primary = assigned[0]
+                            template_license_selection = {
+                                "license_sku_id": primary.get("skuId"),
+                                "disabled_service_plans": list(
+                                    primary.get("disabledPlans") or []
+                                ),
+                                "assigned_count": len(assigned),
+                                "source_principal": graph_user.get("userPrincipalName")
+                                or lookup,
+                            }
+            except M365ClientError as exc:
+                flash(
+                    f"Unable to read Microsoft 365 licenses for the template user: {exc}",
+                    "warning",
+                )
+            except Exception as exc:
+                flash(f"Unexpected Microsoft 365 license error: {exc}", "warning")
+
+        if not selected_license and template_license_selection:
+            selected_license = template_license_selection.get("license_sku_id") or ""
+        if not selected_disabled_plans and template_license_selection:
+            selected_disabled_plans = list(
+                template_license_selection.get("disabled_service_plans") or []
+            )
+
         template_manager_dn: Optional[str] = None
         template_manager_display: Optional[str] = None
         if selected_user:
@@ -846,6 +938,10 @@ def register_routes(app: Flask) -> None:
                 office_name = request.form.get("office", "").strip()
                 attributes = _parse_attributes(request.form.get("attributes", ""))
                 selected_groups = _dedupe_preserve(request.form.getlist("groups"))
+                selected_license = (request.form.get("license_sku") or "").strip()
+                selected_disabled_plans = _dedupe_preserve(
+                    request.form.getlist("license_disabled_plan")
+                )
 
                 if not all([first_name, last_name, username, email, role_name]):
                     raise ValueError("All fields except password and attributes are required.")
@@ -894,6 +990,8 @@ def register_routes(app: Flask) -> None:
                     manager_dn=manager_dn,
                     attributes=attributes,
                     groups=selected_groups,
+                    license_sku_id=selected_license or None,
+                    disabled_service_plans=selected_disabled_plans,
                 )
 
                 chosen_ou = chosen_ou or role.user_ou
@@ -902,6 +1000,34 @@ def register_routes(app: Flask) -> None:
                 with ADClient(config.ldap) as client:
                     result = client.create_user(employee, job_role, password=password)
 
+                try:
+                    seed_status = _auto_seed_job_role(
+                        config,
+                        roles,
+                        role_name,
+                        user_ou=job_role.user_ou or chosen_ou or config.ldap.user_ou,
+                        default_manager_dn=manager_dn,
+                        attributes=attributes,
+                        groups=selected_groups,
+                        license_sku_id=selected_license or None,
+                        disabled_service_plans=selected_disabled_plans,
+                    )
+                    if seed_status == "created":
+                        flash(f"Saved job role template '{role_name}' for future use.", "info")
+                except Exception as exc:  # pragma: no cover - persistence errors should not block cloning
+                    flash(f"Account cloned but job role defaults could not be stored: {exc}", "warning")
+
+                if selected_license:
+                    result["license_sku_id"] = selected_license
+                    result["disabled_service_plans"] = selected_disabled_plans
+                queued_license = _enqueue_license_job(
+                    app, config, email, selected_license, selected_disabled_plans
+                )
+                if queued_license:
+                    flash(
+                        "Microsoft 365 license assignment queued; it will apply shortly.",
+                        "info",
+                    )
                 _trigger_sync(config)
                 flash(
                     f"Cloned user into account {result.get('sAMAccountName')}.",
@@ -927,6 +1053,7 @@ def register_routes(app: Flask) -> None:
         if not prefilled_job_role and selected_user:
             prefilled_job_role = (selected_user.get("title") or "").strip()
 
+        job_titles = _preload_job_titles(config, roles)
         return render_template(
             "clone.html",
             query=query,
@@ -946,7 +1073,13 @@ def register_routes(app: Flask) -> None:
             prefilled_job_role=prefilled_job_role,
             selected_groups=selected_groups,
             role_groups=role_groups,
+            role_license_defaults=role_license_defaults,
+            selected_license=selected_license,
+            selected_disabled_plans=selected_disabled_plans,
+            template_license_selection=template_license_selection,
+            m365_status=m365_status,
             job_roles=roles,
+            job_titles=job_titles,
         )
 
     @app.route("/delete", methods=["GET", "POST"])
@@ -1140,7 +1273,7 @@ def _ou_from_dn(distinguished_name: Optional[str]) -> Optional[str]:
     return distinguished_name.split(",", 1)[1]
 
 
-def _parse_api_limit(raw: Optional[str], default: int = 25, maximum: int = 100) -> int:
+def _parse_api_limit(raw: Optional[str], default: int = 200, maximum: int = 500) -> int:
     try:
         value = int(raw) if raw is not None else default
     except (TypeError, ValueError):
@@ -1312,6 +1445,239 @@ def _filter_assignable_groups(groups: Iterable[str], config: AppConfig) -> Tuple
 def _group_display_name(distinguished_name: str) -> str:
     match = re.match(r"CN=([^,]+)", distinguished_name, re.IGNORECASE)
     return match.group(1) if match else distinguished_name
+
+
+def _preload_job_titles(
+    config: AppConfig,
+    roles: Dict[str, JobRole],
+    limit: int = 500,
+) -> List[str]:
+    titles: set[str] = {name for name in roles if name}
+    try:
+        with ADClient(config.ldap) as client:
+            for title in client.list_job_titles(None, limit):
+                cleaned = (title or "").strip()
+                if cleaned:
+                    titles.add(cleaned)
+    except Exception:
+        pass
+    return sorted(titles, key=str.casefold)
+
+
+def _extract_role_attribute_defaults(role_name: str, attributes: Dict[str, Any]) -> Dict[str, str]:
+    """Select attribute keys that make sense as job role defaults."""
+
+    defaults: Dict[str, str] = {}
+    keys = ("title", "department", "company", "physicalDeliveryOfficeName")
+    for key in keys:
+        value = attributes.get(key)
+        if value is None:
+            continue
+        if isinstance(value, str):
+            cleaned = value.strip()
+        else:
+            cleaned = str(value).strip()
+        if cleaned:
+            defaults[key] = cleaned
+    if role_name and "title" not in defaults:
+        defaults["title"] = role_name
+    return defaults
+
+
+def _auto_seed_job_role(
+    config: AppConfig,
+    roles: Dict[str, JobRole],
+    role_name: str,
+    *,
+    user_ou: Optional[str],
+    default_manager_dn: Optional[str],
+    attributes: Dict[str, Any],
+    groups: Iterable[str],
+    license_sku_id: Optional[str],
+    disabled_service_plans: Iterable[str],
+) -> Optional[str]:
+    """Persist a job role template based on the submitted onboarding data."""
+
+    normalized_name = (role_name or "").strip()
+    if not normalized_name:
+        return None
+
+    role_ou = (user_ou or "").strip() or (config.ldap.user_ou or None)
+    role_manager = (default_manager_dn or "").strip() or None
+    role_groups = _dedupe_preserve(groups or [])
+    role_license = (license_sku_id or "").strip() or None
+    role_disabled_plans = _dedupe_preserve(disabled_service_plans or [])
+    role_attributes = _extract_role_attribute_defaults(normalized_name, attributes or {})
+
+    existing = roles.get(normalized_name)
+    created = False
+    changed = False
+
+    if existing is None:
+        roles[normalized_name] = JobRole(
+            name=normalized_name,
+            description=None,
+            user_ou=role_ou,
+            default_manager_dn=role_manager,
+            attributes=role_attributes,
+            groups=role_groups,
+            license_sku_id=role_license,
+            disabled_service_plans=role_disabled_plans if role_license else [],
+        )
+        created = True
+        changed = True
+    else:
+        updates: Dict[str, Any] = {}
+        if role_ou and not existing.user_ou:
+            updates["user_ou"] = role_ou
+        if role_manager and not existing.default_manager_dn:
+            updates["default_manager_dn"] = role_manager
+        if role_groups and not existing.groups:
+            updates["groups"] = role_groups
+        if role_license and not existing.license_sku_id:
+            updates["license_sku_id"] = role_license
+            updates["disabled_service_plans"] = role_disabled_plans
+        merged_attributes = dict(existing.attributes)
+        attr_changed = False
+        for key, value in role_attributes.items():
+            if key not in merged_attributes or not str(merged_attributes[key]).strip():
+                merged_attributes[key] = value
+                attr_changed = True
+        if attr_changed:
+            updates["attributes"] = merged_attributes
+
+        if updates:
+            roles[normalized_name] = replace(existing, **updates)
+            changed = True
+
+    if changed:
+        save_job_roles(config.storage.job_roles_file, roles)
+        return "created" if created else "updated"
+    return None
+
+
+def _get_license_store(app: Flask, config: AppConfig) -> LicenseJobStore:
+    store = app.config.get("_LICENSE_JOB_STORE")
+    path = config.storage.license_jobs_file
+    if store is None or getattr(store, "path", None) != path:
+        store = LicenseJobStore(path)
+        app.config["_LICENSE_JOB_STORE"] = store
+    return store
+
+
+def _ensure_license_worker(app: Flask) -> None:
+    if app.config.get("_LICENSE_WORKER_THREAD"):
+        return
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "false":
+        return
+    worker = threading.Thread(
+        target=_license_worker_loop,
+        args=(app,),
+        name="license-worker",
+        daemon=True,
+    )
+    worker.start()
+    app.config["_LICENSE_WORKER_THREAD"] = worker
+
+
+def _license_worker_loop(app: Flask) -> None:
+    while True:
+        time.sleep(_LICENSE_WORKER_INTERVAL)
+        try:
+            with app.app_context():
+                config = _load_app_config(app)
+                if not config.m365.has_credentials:
+                    continue
+                store = _get_license_store(app, config)
+                pending_jobs = store.pending_jobs()
+                if not pending_jobs:
+                    continue
+                client = _get_m365_client(app, config)
+                if not client:
+                    continue
+                for job in pending_jobs:
+                    _process_license_job(app, store, client, job)
+        except Exception as exc:  # pragma: no cover - worker resilience
+            app.logger.exception("License worker encountered an error: %s", exc)
+
+
+def _process_license_job(
+    app: Flask,
+    store: LicenseJobStore,
+    client: M365Client,
+    job: LicenseJob,
+) -> None:
+    retry_index = min(job.attempts, len(_LICENSE_RETRY_SCHEDULE) - 1)
+    retry_delay = timedelta(seconds=_LICENSE_RETRY_SCHEDULE[retry_index])
+
+    lookup = job.principal
+    try:
+        graph_user = client.find_user(lookup, select="id,userPrincipalName")
+    except M365ClientError as exc:
+        store.defer_job(job.id, retry_delay, str(exc))
+        app.logger.warning("Microsoft 365 lookup failed for %s: %s", lookup, exc)
+        return
+    except Exception as exc:
+        store.defer_job(job.id, retry_delay, str(exc))
+        app.logger.exception("Unexpected error looking up %s: %s", lookup, exc)
+        return
+
+    if not graph_user or not graph_user.get("id"):
+        store.defer_job(job.id, retry_delay, "User not yet available in Microsoft 365.")
+        app.logger.info("License assignment deferred for %s; user not found.", lookup)
+        return
+
+    user_id = graph_user["id"]
+    try:
+        client.assign_license(user_id, job.sku_id, job.disabled_plans)
+    except M365ClientError as exc:
+        store.defer_job(job.id, retry_delay, str(exc))
+        app.logger.warning(
+            "Microsoft 365 assignLicense deferred for %s (%s): %s",
+            lookup,
+            job.sku_id,
+            exc,
+        )
+        return
+    except Exception as exc:
+        store.defer_job(job.id, retry_delay, str(exc))
+        app.logger.exception(
+            "Unexpected error assigning license %s to %s: %s", job.sku_id, lookup, exc
+        )
+        return
+
+    store.mark_completed(job.id)
+    app.logger.info("Assigned Microsoft 365 license %s to %s.", job.sku_id, lookup)
+
+
+def _enqueue_license_job(
+    app: Flask,
+    config: AppConfig,
+    principal: Optional[str],
+    sku_id: Optional[str],
+    disabled_plans: Iterable[str],
+) -> bool:
+    if not principal or not sku_id:
+        return False
+    if not config.m365.has_credentials:
+        app.logger.info(
+            "Skipping Microsoft 365 license queue for %s; credentials not configured.",
+            principal,
+        )
+        return False
+    try:
+        store = _get_license_store(app, config)
+        store.add_job(
+            principal=principal,
+            sku_id=sku_id,
+            disabled_plans=disabled_plans,
+            delay_seconds=_LICENSE_INITIAL_DELAY_SECONDS,
+        )
+        app.logger.info("Queued Microsoft 365 license assignment for %s (%s).", principal, sku_id)
+        return True
+    except Exception as exc:
+        app.logger.exception("Unable to queue Microsoft 365 license job for %s: %s", principal, exc)
+        return False
 
 
 def _trigger_sync(config: AppConfig) -> None:

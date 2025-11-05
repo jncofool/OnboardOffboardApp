@@ -69,7 +69,7 @@
         autocomplete="off"
       />
       <datalist id="job-role-suggestions">
-        {% for name in job_roles.keys() %}
+        {% for name in job_titles %}
           <option value="{{ name }}"></option>
         {% endfor %}
       </datalist>
@@ -200,7 +200,7 @@
   </form>
   <script>
     document.addEventListener("DOMContentLoaded", () => {
-      const fetchJson = async (endpoint, query, limit = 20) => {
+      const fetchJson = async (endpoint, query, limit = 200) => {
         const url = new URL(endpoint, window.location.origin);
         if (query) {
           url.searchParams.set("q", query);
@@ -217,40 +217,78 @@
         return response.json();
       };
 
-      const wireDatalist = (inputId, datalistId, endpoint, initial = []) => {
+      const wireDatalist = (inputId, datalistId, endpoint, initial = [], options = {}) => {
         const input = document.getElementById(inputId);
         const datalist = document.getElementById(datalistId);
         if (!input || !datalist) {
-          return;
+          return { setStatic: () => {} };
         }
-        const render = (items) => {
+        const minLength =
+          typeof options.minLength === "number" && options.minLength >= 0
+            ? options.minLength
+            : 2;
+        const preload = Boolean(options.preload);
+        const requestLimit =
+          typeof options.limit === "number" && options.limit > 0 ? options.limit : 200;
+        let staticItems = Array.from(
+          new Set((initial || []).map((item) => (item || "").trim()).filter(Boolean))
+        );
+
+        const render = (dynamicItems = []) => {
+          const seen = new Set();
           datalist.innerHTML = "";
-          items.forEach((item) => {
-            if (!item) {
+          const addOption = (value) => {
+            const normalized = (value || "").trim();
+            if (!normalized || seen.has(normalized)) {
               return;
             }
             const option = document.createElement("option");
-            option.value = item;
+            option.value = normalized;
             datalist.appendChild(option);
-          });
+            seen.add(normalized);
+          };
+          staticItems.forEach(addOption);
+          (dynamicItems || []).forEach(addOption);
         };
-        render(initial);
+        render();
+
+        const fetchAndRender = async (query) => {
+          try {
+            const payload = await fetchJson(endpoint, query, requestLimit);
+            render(payload.items || []);
+          } catch (error) {
+            console.error(error);
+          }
+        };
+
         let timer;
         input.addEventListener("input", () => {
           clearTimeout(timer);
           const value = input.value.trim();
-          if (value.length < 2) {
+          if (value.length < minLength) {
+            render();
             return;
           }
           timer = setTimeout(async () => {
-            try {
-              const payload = await fetchJson(endpoint, value);
-              render(payload.items || []);
-            } catch (error) {
-              console.error(error);
-            }
+            fetchAndRender(value);
           }, 200);
         });
+
+        if (preload) {
+          input.addEventListener("focus", () => {
+            fetchAndRender(input.value.trim());
+          });
+          fetchAndRender("");
+        }
+
+        return {
+          setStatic(items) {
+            staticItems = Array.from(
+              new Set((items || []).map((item) => (item || "").trim()).filter(Boolean))
+            );
+            render();
+          },
+        };
       };
 
       const wireManagerAutocomplete = () => {
@@ -906,7 +944,8 @@
         "job_role",
         "job-role-suggestions",
         "/api/job-titles",
-        {{ job_roles.keys()|list|tojson }}
+        {{ job_titles|tojson }},
+        { minLength: 1, preload: true, limit: 500 }
       );
       wireDatalist(
         "user_ou",
