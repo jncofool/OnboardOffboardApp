@@ -1,11 +1,1 @@
-roles:
-- name: Field Service Technician
-  description: Front-line technician responsible for on-site service visits.
-  user_ou: CN=Users,DC=amanomcgann,DC=com
-  default_manager_dn: null
-  attributes:
-    department: Field Services
-    title: Field Service Technician
-  groups:
-  - CN=SG_GPSSRSADMIN,OU=User Groups,DC=amanomcgann,DC=com
-  - CN=SG_GPEXCELUSERS,OU=User Groups,DC=amanomcgann,DC=com
+roles: []

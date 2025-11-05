@@ -24,6 +24,8 @@ class JobRole:
     default_manager_dn: Optional[str] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
     groups: List[str] = field(default_factory=list)
+    license_sku_id: Optional[str] = None
+    disabled_service_plans: List[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "JobRole":
@@ -34,6 +36,8 @@ class JobRole:
             default_manager_dn=data.get("default_manager_dn"),
             attributes=dict(data.get("attributes", {})),
             groups=list(data.get("groups", [])),
+            license_sku_id=data.get("license_sku_id"),
+            disabled_service_plans=list(data.get("disabled_service_plans", [])),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -44,6 +48,8 @@ class JobRole:
             "default_manager_dn": self.default_manager_dn,
             "attributes": dict(self.attributes),
             "groups": list(self.groups),
+            "license_sku_id": self.license_sku_id,
+            "disabled_service_plans": list(self.disabled_service_plans),
         }
 
 
@@ -59,6 +65,8 @@ class Employee:
     manager_dn: Optional[str] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
     groups: List[str] = field(default_factory=list)
+    license_sku_id: Optional[str] = None
+    disabled_service_plans: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.first_name = normalize_person_name(self.first_name)

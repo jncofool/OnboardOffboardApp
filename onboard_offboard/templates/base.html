@@ -188,6 +188,86 @@
       .tag-remove:hover {
         opacity: 0.7;
       }
+      .field-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 1rem;
+      }
+      .status-card {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+        background: var(--card);
+        margin-top: 1rem;
+      }
+      .status-card p {
+        margin: 0 0 0.65rem 0;
+      }
+      .status-card .error {
+        color: #842029;
+        font-size: 0.9rem;
+      }
+      .status-meta {
+        padding: 0;
+        margin: 0 0 0.75rem 0;
+        list-style: none;
+        font-size: 0.9rem;
+      }
+      .status-meta li {
+        margin-bottom: 0.35rem;
+      }
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 0.2rem 0.7rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        background: rgba(13, 110, 253, 0.1);
+        color: var(--accent);
+      }
+      .badge.ok {
+        background: rgba(25, 135, 84, 0.15);
+        color: #0f5132;
+      }
+      .badge.stale {
+        background: rgba(220, 53, 69, 0.15);
+        color: #842029;
+      }
+      .checkbox-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 0.6rem;
+      }
+      .checkbox-card {
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 0.6rem 0.75rem;
+        background: var(--card);
+        display: flex;
+        align-items: flex-start;
+        gap: 0.55rem;
+      }
+      .checkbox-card input[type="checkbox"] {
+        margin-top: 0.2rem;
+      }
+      .checkbox-card strong {
+        display: block;
+        font-size: 0.92rem;
+      }
+      .checkbox-card small {
+        display: block;
+        color: #6c757d;
+        font-size: 0.8rem;
+      }
+      .field-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.5rem;
+      }
     </style>
   </head>
   <body>

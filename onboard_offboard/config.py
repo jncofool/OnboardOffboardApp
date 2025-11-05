@@ -50,12 +50,28 @@ class StorageConfig:
 
 
 @dataclass
+class M365Config:
+    """Settings for the Microsoft 365 / Graph integration."""
+
+    tenant_id: Optional[str] = None
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    sku_cache_file: Path = field(default_factory=lambda: Path("data/m365_skus.json"))
+    cache_ttl_minutes: int = 720  # 12 hours by default
+
+    @property
+    def has_credentials(self) -> bool:
+        return bool(self.tenant_id and self.client_id and self.client_secret)
+
+
+@dataclass
 class AppConfig:
     """Aggregate configuration for the application."""
 
     ldap: LDAPConfig
     sync: SyncConfig
     storage: StorageConfig = field(default_factory=StorageConfig)
+    m365: M365Config = field(default_factory=M365Config)
 
 
 class ConfigurationError(RuntimeError):
@@ -183,6 +199,15 @@ def _optional_path(raw: Any) -> Optional[Path]:
     return Path(raw)
 
 
+def _optional_str(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return str(value)
+
+
 def load_config(path: Optional[Path] = None) -> AppConfig:
     """Load application configuration from disk and environment variables."""
 
@@ -226,7 +251,23 @@ def load_config(path: Optional[Path] = None) -> AppConfig:
         job_roles_file=Path(storage_section.get("job_roles_file", StorageConfig().job_roles_file))
     )
 
-    return AppConfig(ldap=ldap_config, sync=sync_config, storage=storage_config)
+    m365_section = config_dict.get("m365", {})
+    default_m365 = M365Config()
+    cache_path = _optional_path(m365_section.get("sku_cache_file")) or default_m365.sku_cache_file
+    cache_ttl_raw = m365_section.get("cache_ttl_minutes", default_m365.cache_ttl_minutes)
+    try:
+        cache_ttl = _to_int(cache_ttl_raw)
+    except Exception:
+        cache_ttl = default_m365.cache_ttl_minutes
+    m365_config = M365Config(
+        tenant_id=_optional_str(m365_section.get("tenant_id")),
+        client_id=_optional_str(m365_section.get("client_id")),
+        client_secret=_optional_str(m365_section.get("client_secret")),
+        sku_cache_file=cache_path,
+        cache_ttl_minutes=cache_ttl,
+    )
+
+    return AppConfig(ldap=ldap_config, sync=sync_config, storage=storage_config, m365=m365_config)
 
 
 def config_to_dict(config: AppConfig) -> Dict[str, Any]:
@@ -261,6 +302,13 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
         "storage": {
             "job_roles_file": str(config.storage.job_roles_file),
         },
+        "m365": {
+            "tenant_id": config.m365.tenant_id or "",
+            "client_id": config.m365.client_id or "",
+            "client_secret": config.m365.client_secret or "",
+            "sku_cache_file": str(config.m365.sku_cache_file),
+            "cache_ttl_minutes": config.m365.cache_ttl_minutes,
+        },
     }
 
 
@@ -283,6 +331,7 @@ __all__ = [
     "LDAPConfig",
     "SyncConfig",
     "StorageConfig",
+    "M365Config",
     "save_config",
     "load_config",
 ]

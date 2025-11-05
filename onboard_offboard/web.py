@@ -15,6 +15,7 @@ from .ad_client import ADClient
 from .config import (
     AppConfig,
     LDAPConfig,
+    M365Config,
     SyncConfig,
     StorageConfig,
     ensure_default_config,
@@ -24,6 +25,12 @@ from .config import (
 from .models import Employee, JobRole, normalize_person_name
 from .storage import load_job_roles, save_job_roles
 from .sync import run_sync_command
+from .m365_client import (
+    CatalogSnapshot,
+    M365Client,
+    M365ClientError,
+    M365ConfigurationError,
+)
 
 
 _TEMPLATE_FOLDER = Path(__file__).resolve().parent / "templates"
@@ -97,7 +104,38 @@ def register_routes(app: Flask) -> None:
                 storage = StorageConfig(
                     job_roles_file=Path(request.form.get("job_roles_file", config.storage.job_roles_file)).expanduser(),
                 )
-                updated = AppConfig(ldap=ldap, sync=sync, storage=storage)
+
+                current_m365 = getattr(config, "m365", M365Config())
+                tenant_id = request.form.get("m365_tenant_id", "").strip() or None
+                client_id = request.form.get("m365_client_id", "").strip() or None
+                secret_input = request.form.get("m365_client_secret", "")
+                client_secret = secret_input.strip() or current_m365.client_secret
+
+                cache_path_raw = request.form.get("m365_sku_cache_file", "").strip()
+                cache_path = (
+                    Path(cache_path_raw).expanduser()
+                    if cache_path_raw
+                    else current_m365.sku_cache_file
+                )
+                cache_ttl_raw = request.form.get("m365_cache_ttl_minutes", "").strip()
+                try:
+                    cache_ttl = (
+                        int(cache_ttl_raw)
+                        if cache_ttl_raw
+                        else current_m365.cache_ttl_minutes
+                    )
+                except ValueError as exc:
+                    raise ValueError("Cache TTL must be a whole number of minutes.") from exc
+
+                m365 = M365Config(
+                    tenant_id=tenant_id,
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    sku_cache_file=cache_path,
+                    cache_ttl_minutes=max(1, cache_ttl),
+                )
+
+                updated = AppConfig(ldap=ldap, sync=sync, storage=storage, m365=m365)
                 save_config(updated, app.config.get("CONFIG_PATH"))
                 flash("Configuration updated successfully.", "success")
                 return redirect(url_for("edit_config"))
@@ -105,7 +143,13 @@ def register_routes(app: Flask) -> None:
                 flash(f"Unable to save configuration: {exc}", "error")
 
         roles_json = [_serialize_role(role) for role in roles.values()]
-        return render_template("config.html", config=config, roles_json=roles_json)
+        m365_status = _build_m365_status(app, config)
+        return render_template(
+            "config.html",
+            config=config,
+            roles_json=roles_json,
+            m365_status=m365_status,
+        )
 
     @app.route("/onboard", methods=["GET", "POST"])
     def onboard() -> str:
@@ -115,7 +159,17 @@ def register_routes(app: Flask) -> None:
         companies, offices = _load_reference_values(config)
         email_domain = _email_domain_from_config(config)
         role_groups = {name: list(role.groups) for name, role in roles.items()}
+        role_license_defaults = {
+            name: {
+                "license_sku_id": role.license_sku_id,
+                "disabled_service_plans": list(role.disabled_service_plans),
+            }
+            for name, role in roles.items()
+        }
         selected_groups = _dedupe_preserve(request.form.getlist("groups"))
+        selected_license = (request.form.get("license_sku") or "").strip()
+        selected_disabled_plans = _dedupe_preserve(request.form.getlist("license_disabled_plan"))
+        m365_status = _build_m365_status(app, config)
 
         if request.method == "POST":
             try:
@@ -189,6 +243,17 @@ def register_routes(app: Flask) -> None:
                 else:
                     attributes.pop("physicalDeliveryOfficeName", None)
 
+                license_sku = (request.form.get("license_sku") or "").strip() or None
+                disabled_plans_form = _dedupe_preserve(request.form.getlist("license_disabled_plan"))
+
+                role_defaults = role_license_defaults.get(role_name) or {}
+                if not license_sku and role_defaults.get("license_sku_id"):
+                    license_sku = role_defaults.get("license_sku_id")
+                    disabled_plans_form = list(role_defaults.get("disabled_service_plans") or [])
+
+                selected_license = license_sku or ""
+                selected_disabled_plans = disabled_plans_form
+
                 job_role = replace(role, user_ou=chosen_ou or role.user_ou)
                 employee = Employee(
                     first_name=first_name,
@@ -199,10 +264,16 @@ def register_routes(app: Flask) -> None:
                     manager_dn=effective_manager,
                     attributes=attributes,
                     groups=selected_groups,
+                    license_sku_id=license_sku,
+                    disabled_service_plans=disabled_plans_form,
                 )
 
                 with ADClient(config.ldap) as client:
                     result = client.create_user(employee, job_role, password=password)
+
+                if license_sku:
+                    result["license_sku_id"] = license_sku
+                    result["disabled_service_plans"] = disabled_plans_form
 
                 _trigger_sync(config)
                 flash(
@@ -233,6 +304,10 @@ def register_routes(app: Flask) -> None:
             selected_groups=selected_groups,
             role_groups=role_groups,
             job_roles=roles,
+            role_license_defaults=role_license_defaults,
+            selected_license=selected_license,
+            selected_disabled_plans=selected_disabled_plans,
+            m365_status=m365_status,
         )
 
     @app.get("/api/job-titles")
@@ -450,6 +525,74 @@ def register_routes(app: Flask) -> None:
             payload["error"] = ad_error
         return jsonify(payload)
 
+    @app.get("/api/m365/skus")
+    def api_m365_skus() -> Any:
+        config = _load_app_config(app)
+        payload = _build_m365_status(app, config)
+        client = _get_m365_client(app, config)
+        if not client:
+            payload["items"] = []
+            return jsonify(payload)
+
+        refresh_requested = request.args.get("refresh") == "1"
+        snapshot: Optional[CatalogSnapshot]
+        try:
+            snapshot = None
+            if refresh_requested:
+                snapshot = client.refresh_sku_catalog()
+            else:
+                snapshot = client.peek_cached_catalog()
+                if snapshot is None:
+                    snapshot = client.get_sku_catalog(force_refresh=True)
+        except M365ClientError as exc:
+            payload["error"] = str(exc)
+            payload["items"] = []
+            return jsonify(payload), 500
+        except Exception as exc:
+            payload["error"] = str(exc)
+            payload["items"] = []
+            return jsonify(payload), 500
+
+        if snapshot:
+            payload.update(
+                {
+                    "sku_count": len(snapshot.skus),
+                    "fetched_at": snapshot.fetched_at.isoformat(),
+                    "stale": snapshot.stale,
+                }
+            )
+            payload["items"] = snapshot.skus
+        else:
+            payload["items"] = []
+        return jsonify(payload)
+
+    @app.post("/api/m365/skus/refresh")
+    def api_m365_refresh_skus() -> Any:
+        config = _load_app_config(app)
+        client = _get_m365_client(app, config)
+        if not client:
+            payload = _build_m365_status(app, config)
+            payload["items"] = []
+            return jsonify(payload), 400
+
+        try:
+            snapshot = client.refresh_sku_catalog()
+        except M365ClientError as exc:
+            return jsonify({"message": str(exc)}), 500
+        except Exception as exc:
+            return jsonify({"message": str(exc)}), 500
+
+        payload = _build_m365_status(app, config)
+        payload.update(
+            {
+                "sku_count": len(snapshot.skus),
+                "fetched_at": snapshot.fetched_at.isoformat(),
+                "stale": snapshot.stale,
+                "items": snapshot.skus,
+            }
+        )
+        return jsonify(payload)
+
     @app.get("/api/groups")
     def api_groups() -> Any:
         config = _load_app_config(app)
@@ -548,6 +691,12 @@ def register_routes(app: Flask) -> None:
         groups_input = data.get("groups") or []
         groups = _dedupe_preserve(str(value).strip() for value in groups_input)
 
+        license_sku_id = str(data.get("license_sku_id") or "").strip() or None
+        disabled_plans_input = data.get("disabled_service_plans") or []
+        disabled_service_plans = _dedupe_preserve(
+            str(value).strip() for value in disabled_plans_input
+        )
+
         role = JobRole(
             name=name,
             description=description or None,
@@ -555,6 +704,8 @@ def register_routes(app: Flask) -> None:
             default_manager_dn=default_manager_dn or None,
             attributes=attributes,
             groups=groups,
+            license_sku_id=license_sku_id,
+            disabled_service_plans=disabled_service_plans,
         )
         roles[name] = role
         save_job_roles(config.storage.job_roles_file, roles)
@@ -580,6 +731,13 @@ def register_routes(app: Flask) -> None:
         managers, ous = _load_directory_context(config)
         companies, offices = _load_reference_values(config)
         role_groups = {name: list(role.groups) for name, role in roles.items()}
+        role_license_defaults = {
+            name: {
+                "license_sku_id": role.license_sku_id,
+                "disabled_service_plans": list(role.disabled_service_plans),
+            }
+            for name, role in roles.items()
+        }
 
         query = request.args.get("query", "").strip()
         user_dn = request.args.get("user_dn")
@@ -587,6 +745,12 @@ def register_routes(app: Flask) -> None:
         selected_user: Optional[Dict[str, Any]] = None
         template_groups: List[str] = []
         selected_groups = _dedupe_preserve(request.form.getlist("groups"))
+        selected_license = (request.form.get("license_sku") or "").strip()
+        selected_disabled_plans = _dedupe_preserve(
+            request.form.getlist("license_disabled_plan")
+        )
+        template_license_selection: Optional[Dict[str, Any]] = None
+        m365_status = _build_m365_status(app, config)
 
         if query:
             try:
@@ -821,6 +985,77 @@ def register_routes(app: Flask) -> None:
         )
 
 
+def _get_m365_client(app: Flask, config: AppConfig) -> Optional[M365Client]:
+    m365_config = getattr(config, "m365", None)
+    if not m365_config or not m365_config.has_credentials:
+        return None
+
+    signature: Tuple[Any, ...] = (
+        m365_config.tenant_id,
+        m365_config.client_id,
+        m365_config.client_secret,
+        str(m365_config.sku_cache_file),
+        m365_config.cache_ttl_minutes,
+    )
+    cached_signature = app.config.get("_M365_CONFIG_SIGNATURE")
+    cached_client = app.config.get("_M365_CLIENT")
+    if cached_client and cached_signature == signature:
+        return cached_client
+
+    try:
+        client = M365Client(m365_config)
+    except M365ConfigurationError:
+        return None
+
+    app.config["_M365_CLIENT"] = client
+    app.config["_M365_CONFIG_SIGNATURE"] = signature
+    return client
+
+
+def _build_m365_status(app: Flask, config: AppConfig) -> Dict[str, Any]:
+    m365_config = getattr(config, "m365", M365Config())
+    status: Dict[str, Any] = {
+        "configured": bool(m365_config.has_credentials),
+        "sku_count": 0,
+        "fetched_at": None,
+        "stale": False,
+        "error": None,
+        "message": "Microsoft 365 integration is not configured.",
+        "cache_path": str(m365_config.sku_cache_file),
+        "cache_ttl_minutes": m365_config.cache_ttl_minutes,
+        "has_secret": bool(m365_config.client_secret),
+    }
+
+    if not m365_config.has_credentials:
+        return status
+
+    status["message"] = "Microsoft 365 credentials saved. Refresh the catalog to load available licenses."
+
+    try:
+        client = _get_m365_client(app, config)
+        if not client:
+            status["error"] = "Unable to initialise Microsoft 365 client."
+            return status
+
+        snapshot = client.peek_cached_catalog()
+        if snapshot:
+            status["sku_count"] = len(snapshot.skus)
+            status["fetched_at"] = snapshot.fetched_at.isoformat()
+            status["stale"] = snapshot.stale
+            if snapshot.stale:
+                status["message"] = "License catalog cached but older than the configured TTL."
+            else:
+                status["message"] = "License catalog cached."
+        else:
+            status["message"] = "No license catalog cached yet. Refresh to fetch licenses from Microsoft 365."
+    except M365ClientError as exc:
+        status["error"] = str(exc)
+    except Exception as exc:
+        status["error"] = str(exc)
+
+    return status
+
+
 def _load_app_config(app: Flask) -> AppConfig:
     return load_config(app.config.get("CONFIG_PATH"))
 
@@ -1041,6 +1276,8 @@ def _serialize_role(role: JobRole) -> Dict[str, Any]:
         "default_manager_dn": role.default_manager_dn,
         "attributes": dict(role.attributes),
         "groups": list(role.groups),
+        "license_sku_id": role.license_sku_id,
+        "disabled_service_plans": list(role.disabled_service_plans),
     }
 
 

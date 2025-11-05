@@ -93,6 +93,31 @@
       </div>
       <div id="group_hidden_inputs"></div>
     </div>
+    {% if m365_status.configured %}
+      <div class="field" id="license_field">
+        <label for="license_sku">Microsoft 365 License</label>
+        <select id="license_sku" name="license_sku">
+          <option value="">Do not assign a license</option>
+        </select>
+        <div class="field-actions">
+          <button type="button" class="inline-button" id="apply_role_license">Use role default</button>
+          <button type="button" class="inline-button" id="clear_license">Clear license</button>
+        </div>
+        <small id="license_status_message" class="hint"></small>
+      </div>
+      <div class="field" id="service_plan_field" hidden>
+        <label>Apps</label>
+        <div id="license_plan_list" class="checkbox-grid"></div>
+        <div id="license_hidden_inputs"></div>
+      </div>
+    {% else %}
+      <div class="status-card">
+        <span class="badge">Not Configured</span>
+        <p>
+          Microsoft 365 credentials have not been configured. Add them on the Configuration page to manage licenses during onboarding.
+        </p>
+      </div>
+    {% endif %}
     <div class="field">
       <label for="password">Temporary Password (optional)</label>
       <input id="password" name="password" type="password" />
@@ -301,13 +326,234 @@
         input.addEventListener("blur", () => {
           setTimeout(clearResults, 150);
         });
-        useDefaultBtn.addEventListener("click", () => {
-          input.value = "";
-          hidden.value = "";
-          delete input.dataset.manual;
-          clearResults();
+      useDefaultBtn.addEventListener("click", () => {
+        input.value = "";
+        hidden.value = "";
+        delete input.dataset.manual;
+        clearResults();
+      });
+    };
+
+    const createLicensePicker = ({
+      selectEl,
+      planContainer,
+      hiddenContainer,
+      statusEl,
+      planField,
+      onManualChange,
+    }) => {
+      const skuMap = new Map();
+      let currentSku = "";
+      let disabledPlans = new Set();
+
+      const setStatus = (message) => {
+        if (statusEl) {
+          statusEl.textContent = message || "";
+        }
+      };
+
+      const syncHidden = () => {
+        if (!hiddenContainer) {
+          return;
+        }
+        hiddenContainer.innerHTML = "";
+        disabledPlans.forEach((planId) => {
+          if (!planId) {
+            return;
+          }
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.name = "license_disabled_plan";
+          input.value = planId;
+          hiddenContainer.appendChild(input);
         });
       };
+
+      const formatAvailability = (sku) => {
+        if (!sku) {
+          return "";
+        }
+        const enabled = Number(sku?.prepaidUnits?.enabled ?? 0);
+        const consumed = Number(sku?.consumedUnits ?? 0);
+        const available = Math.max(0, enabled - consumed);
+        const name = sku?.skuPartNumber || sku?.skuId || "License";
+        return `${name} · ${available} available (${enabled} purchased)`;
+      };
+
+      const renderPlans = () => {
+        if (!planContainer) {
+          return;
+        }
+        const field = planField || planContainer.closest(".field");
+        planContainer.innerHTML = "";
+        if (!currentSku || !skuMap.has(currentSku)) {
+          if (field) {
+            field.hidden = true;
+          }
+          syncHidden();
+          if (skuMap.size) {
+            setStatus("Select a license to customise apps.");
+          }
+          return;
+        }
+        const sku = skuMap.get(currentSku);
+        const plans = (sku?.servicePlans || []).filter((plan) => plan?.servicePlanId);
+        plans.sort((a, b) =>
+          (a.servicePlanName || "").localeCompare(b.servicePlanName || "")
+        );
+        if (field) {
+          field.hidden = plans.length === 0;
+        }
+        plans.forEach((plan) => {
+          const planId = String(plan.servicePlanId);
+          const wrapper = document.createElement("label");
+          wrapper.className = "checkbox-card";
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.value = planId;
+          checkbox.checked = !disabledPlans.has(planId);
+          checkbox.addEventListener("change", (event) => {
+            if (event.target.checked) {
+              disabledPlans.delete(planId);
+            } else {
+              disabledPlans.add(planId);
+            }
+            syncHidden();
+            if (typeof onManualChange === "function") {
+              onManualChange();
+            }
+          });
+          const info = document.createElement("div");
+          const title = document.createElement("strong");
+          title.textContent = plan.servicePlanName || planId;
+          info.appendChild(title);
+          const details = [];
+          if (plan.provisioningStatus) {
+            details.push(`Status: ${plan.provisioningStatus}`);
+          }
+          if (plan.appliesTo && plan.appliesTo !== "User") {
+            details.push(`Scope: ${plan.appliesTo}`);
+          }
+          if (details.length) {
+            const small = document.createElement("small");
+            small.textContent = details.join(" • ");
+            info.appendChild(small);
+          }
+          wrapper.appendChild(checkbox);
+          wrapper.appendChild(info);
+          planContainer.appendChild(wrapper);
+        });
+        setStatus(formatAvailability(sku));
+        syncHidden();
+      };
+
+      const setSelectOptions = () => {
+        if (!selectEl) {
+          return;
+        }
+        const previousValue = selectEl.value || "";
+        selectEl.innerHTML = "";
+        const defaultOption = document.createElement("option");
+        defaultOption.value = "";
+        defaultOption.textContent = "Do not assign a license";
+        selectEl.appendChild(defaultOption);
+        skuMap.forEach((sku, skuId) => {
+          const option = document.createElement("option");
+          option.value = skuId;
+          const enabled = Number(sku?.prepaidUnits?.enabled ?? 0);
+          const consumed = Number(sku?.consumedUnits ?? 0);
+          const available = Math.max(0, enabled - consumed);
+          option.textContent = `${sku?.skuPartNumber || skuId} (Available: ${available})`;
+          if (available <= 0) {
+            option.textContent += " — Exhausted";
+          }
+          selectEl.appendChild(option);
+        });
+        if (currentSku) {
+          selectEl.value = currentSku;
+        } else if (previousValue) {
+          selectEl.value = previousValue;
+        }
+        selectEl.disabled = skuMap.size === 0;
+        if (skuMap.size === 0) {
+          setStatus("No licenses available. Refresh the catalog on the Configuration page.");
+        }
+      };
+
+      const setValue = (skuId, disabledList, options = {}) => {
+        const skipManual = Boolean(options.skipManual);
+        currentSku = skuId || "";
+        disabledPlans = new Set((disabledList || []).map((value) => String(value)));
+        if (selectEl) {
+          selectEl.value = currentSku;
+        }
+        if (!skipManual && typeof onManualChange === "function" && currentSku) {
+          onManualChange();
+        }
+        renderPlans();
+        if (currentSku && skuMap.has(currentSku)) {
+          setStatus(formatAvailability(skuMap.get(currentSku)));
+        } else if (skuMap.size > 0) {
+          setStatus("Select a license to customise apps.");
+        }
+        syncHidden();
+      };
+
+      selectEl?.addEventListener("change", () => {
+        setValue(selectEl.value, [], { skipManual: true });
+        if (typeof onManualChange === "function") {
+          onManualChange();
+        }
+      });
+
+      const loadSkus = async () => {
+        try {
+          const response = await fetch("/api/m365/skus", {
+            headers: { Accept: "application/json" },
+          });
+          const payload = await response.json();
+          if (!response.ok) {
+            throw new Error(payload.error || payload.message || "Unable to load license catalog.");
+          }
+          skuMap.clear();
+          (payload.items || []).forEach((sku) => {
+            if (!sku?.skuId) {
+              return;
+            }
+            skuMap.set(String(sku.skuId), sku);
+          });
+          setSelectOptions();
+          renderPlans();
+          if (currentSku && !skuMap.has(currentSku)) {
+            setValue("", [], { skipManual: true });
+          }
+          if (!currentSku && skuMap.size > 0) {
+            setStatus("Select a license to customise apps.");
+          }
+          return payload;
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : String(error));
+          skuMap.clear();
+          setSelectOptions();
+          renderPlans();
+          throw error;
+        }
+      };
+
+      return {
+        loadSkus,
+        setValue: (skuId, disabledList, skipManual = false) =>
+          setValue(skuId, disabledList, { skipManual }),
+        getValue: () => ({
+          skuId: currentSku,
+          disabledPlans: Array.from(disabledPlans),
+        }),
+        getLabel: (skuId) => {
+          const sku = skuMap.get(skuId);
+          return sku ? sku.skuPartNumber || sku.skuId : skuId;
+        },
+      };
+    };
 
       const jobRoleInput = document.getElementById("job_role");
       const roleGroups = {{ role_groups|tojson }};
@@ -317,6 +563,80 @@
       const groupResults = document.getElementById("group_results");
       const groupHiddenInputs = document.getElementById("group_hidden_inputs");
       const applyRoleGroupsButton = document.getElementById("apply_role_groups");
+      const roleLicenseDefaults = {{ role_license_defaults|tojson }};
+      const initialLicenseSku = {{ selected_license|tojson }};
+      const initialDisabledPlans = {{ selected_disabled_plans|tojson }};
+      const m365Status = {{ m365_status|tojson }};
+      const licenseSelect = document.getElementById("license_sku");
+      const licensePlanList = document.getElementById("license_plan_list");
+      const licenseHiddenInputs = document.getElementById("license_hidden_inputs");
+      const licenseStatusMessage = document.getElementById("license_status_message");
+      const licensePlanField = document.getElementById("service_plan_field");
+      const applyRoleLicenseButton = document.getElementById("apply_role_license");
+      const clearLicenseButton = document.getElementById("clear_license");
+      let licensePicker = null;
+      let licenseManuallyEdited = Boolean(initialLicenseSku);
+
+      const applyRoleLicenseDefaults = (force = false) => {
+        if (!licensePicker || !jobRoleInput) {
+          return;
+        }
+        const roleName = jobRoleInput.value?.trim() || "";
+        const defaults = roleLicenseDefaults[roleName];
+        if (!defaults) {
+          if (force) {
+            licensePicker.setValue("", [], true);
+            licenseManuallyEdited = false;
+          }
+          return;
+        }
+        if (!force && licenseManuallyEdited) {
+          return;
+        }
+        licensePicker.setValue(
+          defaults.license_sku_id || "",
+          defaults.disabled_service_plans || [],
+          true
+        );
+        licenseManuallyEdited = false;
+      };
+
+      if (licenseSelect) {
+        licensePicker = createLicensePicker({
+          selectEl: licenseSelect,
+          planContainer: licensePlanList,
+          hiddenContainer: licenseHiddenInputs,
+          statusEl: licenseStatusMessage,
+          planField: licensePlanField,
+          onManualChange: () => {
+            licenseManuallyEdited = true;
+          },
+        });
+        licensePicker
+          .loadSkus()
+          .then(() => {
+            if (initialLicenseSku) {
+              licensePicker.setValue(initialLicenseSku, initialDisabledPlans, true);
+            } else {
+              applyRoleLicenseDefaults(true);
+            }
+          })
+          .catch(() => {
+            /* errors already shown via status message */
+          });
+      }
+
+      applyRoleLicenseButton?.addEventListener("click", () => {
+        applyRoleLicenseDefaults(true);
+      });
+
+      clearLicenseButton?.addEventListener("click", () => {
+        if (!licensePicker) {
+          return;
+        }
+        licensePicker.setValue("", [], true);
+        licenseManuallyEdited = true;
+      });
 
       const formatGroupLabel = (value, friendly) => {
         if (friendly) {
@@ -413,12 +733,19 @@
         if (changed) {
           renderGroups();
         }
+        applyRoleLicenseDefaults();
       };
 
-      jobRoleInput?.addEventListener("change", applyRoleGroups);
-      jobRoleInput?.addEventListener("blur", applyRoleGroups);
+      const handleRoleDefaults = () => {
+        applyRoleGroups();
+        applyRoleLicenseDefaults();
+      };
+
+      jobRoleInput?.addEventListener("change", handleRoleDefaults);
+      jobRoleInput?.addEventListener("blur", handleRoleDefaults);
       applyRoleGroupsButton?.addEventListener("click", () => {
         applyRoleGroups();
+        applyRoleLicenseDefaults(true);
         groupSearchInput?.focus();
       });
 
@@ -485,6 +812,7 @@
       });
 
       applyRoleGroups();
+      applyRoleLicenseDefaults();
 
       const domain = {{ (email_domain or '')|tojson }};
       const emailInput = document.getElementById("email");

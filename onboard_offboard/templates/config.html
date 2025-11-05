@@ -71,6 +71,84 @@
       </div>
     </section>
 
+    <section>
+      <h2>Microsoft 365</h2>
+      <p>
+        Provide your Microsoft Graph application credentials to manage cloud licenses after onboarding.
+        Leave the client secret blank to keep the existing value.
+      </p>
+      <div class="field-grid">
+        <div class="field">
+          <label for="m365_tenant_id">Tenant ID</label>
+          <input
+            id="m365_tenant_id"
+            name="m365_tenant_id"
+            type="text"
+            value="{{ config.m365.tenant_id or '' }}"
+            placeholder="7c98eced-e44f-40c3-b38b-242eeaebde35"
+            autocomplete="off"
+          />
+        </div>
+        <div class="field">
+          <label for="m365_client_id">Client ID (Application ID)</label>
+          <input
+            id="m365_client_id"
+            name="m365_client_id"
+            type="text"
+            value="{{ config.m365.client_id or '' }}"
+            placeholder="33a87ac0-5965-4a22-9f5b-e45dd48d5211"
+            autocomplete="off"
+          />
+        </div>
+        <div class="field">
+          <label for="m365_client_secret">Client Secret</label>
+          <input
+            id="m365_client_secret"
+            name="m365_client_secret"
+            type="password"
+            value=""
+            placeholder="{% if m365_status.has_secret %}Leave blank to keep existing secret{% else %}Paste generated secret{% endif %}"
+            autocomplete="off"
+          />
+        </div>
+        <div class="field">
+          <label for="m365_sku_cache_file">License Cache File</label>
+          <input
+            id="m365_sku_cache_file"
+            name="m365_sku_cache_file"
+            type="text"
+            value="{{ config.m365.sku_cache_file }}"
+          />
+        </div>
+        <div class="field">
+          <label for="m365_cache_ttl_minutes">Cache TTL (minutes)</label>
+          <input
+            id="m365_cache_ttl_minutes"
+            name="m365_cache_ttl_minutes"
+            type="number"
+            min="1"
+            value="{{ config.m365.cache_ttl_minutes }}"
+          />
+        </div>
+      </div>
+      <div class="status-card" id="m365_status_card">
+        <span class="badge{% if m365_status.configured and not m365_status.error and not m365_status.stale %} ok{% elif m365_status.stale or m365_status.error %} stale{% endif %}" id="m365_status_badge">
+          {% if not m365_status.configured %}Not Configured{% elif m365_status.error %}Error{% elif m365_status.stale %}Stale{% else %}Ready{% endif %}
+        </span>
+        <p id="m365_status_message">{{ m365_status.message }}</p>
+        <p id="m365_status_error" class="error" {% if not m365_status.error %}style="display: none;"{% endif %}>{{ m365_status.error }}</p>
+        <ul class="status-meta">
+          <li><strong>SKUs cached:</strong> <span id="m365_status_count">{{ m365_status.sku_count }}</span></li>
+          <li><strong>Last refreshed:</strong> <span id="m365_status_fetched">{{ m365_status.fetched_at or 'Never' }}</span></li>
+          <li><strong>Cache TTL:</strong> {{ m365_status.cache_ttl_minutes }} minutes</li>
+        </ul>
+        <button type="button" id="m365_refresh_button" {% if not m365_status.configured %}disabled{% endif %}>
+          Refresh License Catalog
+        </button>
+        <small>Cache file: <span id="m365_status_cache_path">{{ m365_status.cache_path }}</span></small>
+      </div>
+    </section>
+
     <div class="field">
       <button type="submit">Save Configuration</button>
     </div>
@@ -180,6 +258,120 @@
         }
         return response.json();
       };
+
+      const m365InitialStatus = {{ m365_status|tojson }};
+      const m365Card = document.getElementById("m365_status_card");
+      const m365Message = document.getElementById("m365_status_message");
+      const m365Error = document.getElementById("m365_status_error");
+      const m365Count = document.getElementById("m365_status_count");
+      const m365Fetched = document.getElementById("m365_status_fetched");
+      const m365RefreshButton = document.getElementById("m365_refresh_button");
+      const m365CachePath = document.getElementById("m365_status_cache_path");
+      const m365Badge = document.getElementById("m365_status_badge");
+      const m365RefreshLabel = m365RefreshButton ? m365RefreshButton.textContent : "";
+      let currentM365Status = m365InitialStatus;
+
+      const renderM365Status = (data) => {
+        if (!m365Card) {
+          return;
+        }
+        const status = data || {};
+        if (m365Message) {
+          m365Message.textContent =
+            status.message || "Microsoft 365 integration is not configured.";
+        }
+        if (m365Error) {
+          if (status.error) {
+            m365Error.textContent = status.error;
+            m365Error.style.display = "";
+          } else {
+            m365Error.textContent = "";
+            m365Error.style.display = "none";
+          }
+        }
+        if (m365Count) {
+          m365Count.textContent =
+            typeof status.sku_count === "number" ? status.sku_count : 0;
+        }
+        if (m365Fetched) {
+          m365Fetched.textContent = status.fetched_at
+            ? new Date(status.fetched_at).toLocaleString()
+            : "Never";
+        }
+        if (m365CachePath) {
+          m365CachePath.textContent = status.cache_path || "";
+        }
+        if (m365RefreshButton) {
+          m365RefreshButton.disabled = !status.configured;
+        }
+        if (m365Badge) {
+          m365Badge.classList.remove("ok", "stale");
+          if (!status.configured) {
+            m365Badge.textContent = "Not Configured";
+          } else if (status.error) {
+            m365Badge.classList.add("stale");
+            m365Badge.textContent = "Error";
+          } else if (status.stale) {
+            m365Badge.classList.add("stale");
+            m365Badge.textContent = "Stale";
+          } else {
+            m365Badge.classList.add("ok");
+            m365Badge.textContent = "Ready";
+          }
+        }
+        currentM365Status = status;
+      };
+
+      const loadM365Status = async (refresh = false) => {
+        if (!m365Card) {
+          return;
+        }
+        const endpoint = refresh ? "/api/m365/skus/refresh" : "/api/m365/skus";
+        const options =
+          refresh
+            ? { method: "POST", headers: { Accept: "application/json" } }
+            : { headers: { Accept: "application/json" } };
+        try {
+          const response = await fetch(endpoint, options);
+          const payload = await response.json();
+          if (!response.ok) {
+            throw new Error(payload.message || "Unable to query Microsoft 365.");
+          }
+          renderM365Status(payload);
+        } catch (error) {
+          if (m365Message) {
+            m365Message.textContent =
+              error instanceof Error ? error.message : String(error);
+          }
+          if (m365Error) {
+            m365Error.textContent = "";
+            m365Error.style.display = "none";
+          }
+        } finally {
+          if (m365RefreshButton) {
+            m365RefreshButton.disabled = !currentM365Status.configured;
+            m365RefreshButton.textContent =
+              m365RefreshLabel || "Refresh License Catalog";
+          }
+        }
+      };
+
+      if (m365RefreshButton) {
+        m365RefreshButton.addEventListener("click", () => {
+          m365RefreshButton.disabled = true;
+          m365RefreshButton.textContent = "Refreshing…";
+          loadM365Status(true);
+        });
+      }
+
+      renderM365Status(m365InitialStatus);
+      if (
+        m365InitialStatus &&
+        m365InitialStatus.configured &&
+        (!m365InitialStatus.sku_count || m365InitialStatus.stale)
+      ) {
+        loadM365Status(m365InitialStatus.stale);
+      }
 
       const wireDatalist = (input, datalist, endpoint) => {
         if (!input || !datalist) {
