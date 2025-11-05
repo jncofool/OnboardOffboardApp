@@ -47,6 +47,7 @@ class StorageConfig:
     """Filesystem locations used by the application."""
 
     job_roles_file: Path = Path("data/job_roles.yaml")
+    license_jobs_file: Path = Path("data/license_jobs.json")
 
 
 @dataclass
@@ -248,7 +249,10 @@ def load_config(path: Optional[Path] = None) -> AppConfig:
 
     storage_section = config_dict.get("storage", {})
     storage_config = StorageConfig(
-        job_roles_file=Path(storage_section.get("job_roles_file", StorageConfig().job_roles_file))
+        job_roles_file=Path(storage_section.get("job_roles_file", StorageConfig().job_roles_file)),
+        license_jobs_file=Path(
+            storage_section.get("license_jobs_file", StorageConfig().license_jobs_file)
+        ),
     )
 
     m365_section = config_dict.get("m365", {})
@@ -301,6 +305,7 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
         },
         "storage": {
             "job_roles_file": str(config.storage.job_roles_file),
+            "license_jobs_file": str(config.storage.license_jobs_file),
         },
         "m365": {
             "tenant_id": config.m365.tenant_id or "",

@@ -167,7 +167,15 @@ class M365Client:
     # User helpers (used in later steps)                                 #
     # ------------------------------------------------------------------ #
     def find_user(self, query: str, select: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        params = {"$filter": f"userPrincipalName eq '{query}'"}
+        cleaned = (query or "").strip()
+        if not cleaned:
+            return None
+        escaped = cleaned.replace("'", "''")
+        filters = [
+            f"userPrincipalName eq '{escaped}'",
+            f"mail eq '{escaped}'",
+        ]
+        params = {"$filter": " or ".join(filters)}
         if select:
             params["$select"] = select
         result = self._request("GET", "/users", params=params)

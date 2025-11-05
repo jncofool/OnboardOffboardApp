@@ -69,6 +69,17 @@
         <label for="job_roles_file">Job Roles File</label>
         <input id="job_roles_file" name="job_roles_file" type="text" value="{{ config.storage.job_roles_file }}" />
       </div>
+      <div class="field">
+        <label for="license_jobs_file">License Jobs File</label>
+        <input
+          id="license_jobs_file"
+          name="license_jobs_file"
+          type="text"
+          value="{{ config.storage.license_jobs_file }}"
+          placeholder="data/license_jobs.json"
+        />
+        <div class="hint">Queued Microsoft 365 license assignments are stored here.</div>
+      </div>
     </section>
 
     <section>
@@ -182,10 +193,25 @@
     <form id="role_form" class="card" autocomplete="off">
       <h3 id="role_form_heading">Add Role</h3>
       <input type="hidden" id="role_original_name" />
-      <div class="field">
-        <label for="role_name">Role Name</label>
-        <input id="role_name" type="text" required />
-      </div>
+        <div class="field">
+          <label for="role_name">Role Name</label>
+          <input
+            id="role_name"
+            type="text"
+            list="role-title-suggestions"
+            placeholder="Start typing a job title"
+            autocomplete="off"
+            required
+          />
+          <datalist id="role-title-suggestions">
+            {% for title in job_titles %}
+              <option value="{{ title }}"></option>
+            {% endfor %}
+          </datalist>
+          <div class="hint">
+            Suggestions combine existing templates and Active Directory job titles. You can still enter a new title.
+          </div>
+        </div>
       <div class="field">
         <label for="role_description">Description (optional)</label>
         <input id="role_description" type="text" />
@@ -237,12 +263,13 @@
 
   <script>
     document.addEventListener("DOMContentLoaded", () => {
-      const initialRoles = {{ roles_json|tojson }};
-      const state = {
-        roles: Array.isArray(initialRoles) ? [...initialRoles] : [],
-      };
+        const initialRoles = {{ roles_json|tojson }};
+        const initialJobTitles = {{ job_titles|tojson }};
+        const state = {
+          roles: Array.isArray(initialRoles) ? [...initialRoles] : [],
+        };
 
-      const fetchJson = async (endpoint, query, limit = 20) => {
+      const fetchJson = async (endpoint, query, limit = 200) => {
         const url = new URL(endpoint, window.location.origin);
         if (query) {
           url.searchParams.set("q", query);
@@ -373,34 +400,78 @@
         loadM365Status(m365InitialStatus.stale);
       }
 
-      const wireDatalist = (input, datalist, endpoint) => {
+      const wireDatalist = (input, datalist, endpoint, initialItems = [], options = {}) => {
         if (!input || !datalist) {
-          return;
+          return { setStatic: () => {} };
         }
+        const minLength =
+          typeof options.minLength === "number" && options.minLength >= 0
+            ? options.minLength
+            : 2;
+        const preload = Boolean(options.preload);
+        const requestLimit =
+          typeof options.limit === "number" && options.limit > 0 ? options.limit : 200;
+
+        let staticItems = Array.from(
+          new Set((initialItems || []).map((item) => (item || "").trim()).filter(Boolean))
+        );
+
+        const render = (dynamicItems = []) => {
+          const seen = new Set();
+          datalist.innerHTML = "";
+          const addOption = (value) => {
+            const normalized = (value || "").trim();
+            if (!normalized || seen.has(normalized)) {
+              return;
+            }
+            seen.add(normalized);
+            const option = document.createElement("option");
+            option.value = normalized;
+            datalist.appendChild(option);
+          };
+          staticItems.forEach(addOption);
+          (dynamicItems || []).forEach(addOption);
+        };
+
+        render();
+
+        const fetchAndRender = async (query) => {
+          try {
+            const payload = await fetchJson(endpoint, query, requestLimit);
+            render(payload.items || []);
+          } catch (error) {
+            console.error(error);
+          }
+        };
+
         let timer;
         input.addEventListener("input", () => {
           clearTimeout(timer);
           const value = input.value.trim();
-          if (value.length < 2) {
+          if (value.length < minLength) {
+            render();
             return;
           }
           timer = setTimeout(async () => {
-            try {
-              const payload = await fetchJson(endpoint, value);
-              datalist.innerHTML = "";
-              (payload.items || []).forEach((item) => {
-                if (!item) {
-                  return;
-                }
-                const option = document.createElement("option");
-                option.value = item;
-                datalist.appendChild(option);
-              });
-            } catch (error) {
-              console.error(error);
-            }
+            fetchAndRender(value);
           }, 200);
         });
+
+        if (preload) {
+          input.addEventListener("focus", () => {
+            fetchAndRender(input.value.trim());
+          });
+          fetchAndRender("");
+        }
+
+        return {
+          setStatic(items) {
+            staticItems = Array.from(
+              new Set((items || []).map((item) => (item || "").trim()).filter(Boolean))
+            );
+            render();
+          },
+        };
       };
 
       const createManagerAutocomplete = (input, hidden, results, clearButton) => {
@@ -613,6 +684,7 @@
       const roleFormHeading = document.getElementById("role_form_heading");
       const roleOriginalNameInput = document.getElementById("role_original_name");
       const roleNameInput = document.getElementById("role_name");
+      const roleTitleDatalist = document.getElementById("role-title-suggestions");
       const roleDescriptionInput = document.getElementById("role_description");
       const roleUserOuInput = document.getElementById("role_user_ou");
       const roleUserOuDatalist = document.getElementById("role-ou-suggestions");
@@ -626,6 +698,14 @@
       const roleGroupResults = document.getElementById("role_group_results");
       const roleMessage = document.getElementById("role_form_message");
       const roleResetButton = document.getElementById("role_reset_button");
+
+      const getRoleTitleSeeds = () =>
+        Array.from(
+          new Set([
+            ...(Array.isArray(initialJobTitles) ? initialJobTitles : []),
+            ...state.roles.map((role) => role.name).filter(Boolean),
+          ])
+        );
 
       const setRoleMessage = (text, variant = "success") => {
         if (!roleMessage) {
@@ -642,6 +722,13 @@
         roleMessage.className = `field flash ${variant}`;
       };
 
+      const roleTitleSuggestions = wireDatalist(
+        roleNameInput,
+        roleTitleDatalist,
+        "/api/job-titles",
+        getRoleTitleSeeds(),
+        { minLength: 1, preload: true, limit: 500 }
+      );
       wireDatalist(roleUserOuInput, roleUserOuDatalist, "/api/ous");
       const setManagerField = createManagerAutocomplete(
         roleManagerSearchInput,
@@ -681,6 +768,7 @@
           state.roles.push(role);
         }
         state.roles.sort((a, b) => a.name.localeCompare(b.name));
+        roleTitleSuggestions.setStatic(getRoleTitleSeeds());
       };
 
       const removeRoleLocal = (name) => {
@@ -688,6 +776,7 @@
         if (index >= 0) {
           state.roles.splice(index, 1);
         }
+        roleTitleSuggestions.setStatic(getRoleTitleSeeds());
       };
 
       const renderRoleTable = () => {

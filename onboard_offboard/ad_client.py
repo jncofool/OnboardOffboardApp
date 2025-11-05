@@ -310,35 +310,14 @@ class ADClient:
             return self._mock_directory.list_job_titles(query, limit)
 
         assert self.connection is not None
-        base_dn = self.config.group_search_base or self.config.base_dn
+        base_dn = self.config.base_dn
         if query:
             escaped = self._escape_filter_value(query)
             filter_str = f"(&(objectClass=user)(title=*{escaped}*))"
         else:
             filter_str = "(&(objectClass=user)(title=*))"
 
-        self.connection.search(
-            search_base=base_dn,
-            search_filter=filter_str,
-            search_scope=SUBTREE,
-            attributes=["title"],
-            size_limit=limit,
-        )
-
-        titles: List[str] = []
-        seen = set()
-        for entry in self.connection.entries:
-            if "title" not in entry:
-                continue
-            title = str(entry["title"])
-            if not title or title in seen:
-                continue
-            seen.add(title)
-            titles.append(title)
-            if len(titles) >= limit:
-                break
-        titles.sort()
-        return titles
+        return self._paged_attribute_values(base_dn, filter_str, "title", limit)
 
     def list_companies(self, query: Optional[str] = None, limit: int = 25) -> List[str]:
         limit = self._clamp_limit(limit)
@@ -346,35 +325,14 @@ class ADClient:
             return self._mock_directory.list_companies(query, limit)
 
         assert self.connection is not None
-        base_dn = self.config.group_search_base or self.config.base_dn
+        base_dn = self.config.base_dn
         if query:
             escaped = self._escape_filter_value(query)
             filter_str = f"(&(objectClass=user)(company=*{escaped}*))"
         else:
             filter_str = "(&(objectClass=user)(company=*))"
 
-        self.connection.search(
-            search_base=base_dn,
-            search_filter=filter_str,
-            search_scope=SUBTREE,
-            attributes=["company"],
-            size_limit=limit,
-        )
-
-        companies: List[str] = []
-        seen: set[str] = set()
-        for entry in self.connection.entries:
-            if "company" not in entry:
-                continue
-            value = str(entry["company"])
-            if not value or value in seen:
-                continue
-            seen.add(value)
-            companies.append(value)
-            if len(companies) >= limit:
-                break
-        companies.sort()
-        return companies
+        return self._paged_attribute_values(base_dn, filter_str, "company", limit)
 
     def list_groups(self, query: Optional[str] = None, limit: int = 25) -> List[Dict[str, str]]:
         limit = self._clamp_limit(limit)
@@ -436,7 +394,7 @@ class ADClient:
             return self._mock_directory.list_offices(query, limit)
 
         assert self.connection is not None
-        base_dn = self.config.group_search_base or self.config.base_dn
+        base_dn = self.config.base_dn
         attribute = "physicalDeliveryOfficeName"
         if query:
             escaped = self._escape_filter_value(query)
@@ -444,28 +402,54 @@ class ADClient:
         else:
             filter_str = f"(&(objectClass=user)({attribute}=*))"
 
-        self.connection.search(
-            search_base=base_dn,
-            search_filter=filter_str,
+        return self._paged_attribute_values(base_dn, filter_str, attribute, limit)
+
+    def _paged_attribute_values(
+        self,
+        search_base: str,
+        search_filter: str,
+        attribute: str,
+        limit: int,
+    ) -> List[str]:
+        """Return unique string values for an attribute using a paged LDAP search."""
+
+        assert self.connection is not None
+
+        page_size = min(max(limit, 100), 1000)
+        results = self.connection.extend.standard.paged_search(
+            search_base=search_base,
+            search_filter=search_filter,
             search_scope=SUBTREE,
             attributes=[attribute],
-            size_limit=limit,
+            paged_size=page_size,
+            generator=True,
         )
 
-        offices: List[str] = []
+        values: List[str] = []
         seen: set[str] = set()
-        for entry in self.connection.entries:
-            if attribute not in entry:
+        for entry in results:
+            if entry.get("type") != "searchResEntry":
                 continue
-            value = str(entry[attribute])
-            if not value or value in seen:
+            attributes = entry.get("attributes", {})
+            raw_value = attributes.get(attribute)
+            if not raw_value:
                 continue
-            seen.add(value)
-            offices.append(value)
-            if len(offices) >= limit:
-                break
-        offices.sort()
-        return offices
+
+            if isinstance(raw_value, (list, tuple, set)):
+                candidates = raw_value
+            else:
+                candidates = [raw_value]
+
+            for candidate in candidates:
+                normalized = str(candidate).strip()
+                if not normalized or normalized in seen:
+                    continue
+                seen.add(normalized)
+                values.append(normalized)
+                if len(values) >= limit:
+                    return sorted(values, key=str.casefold)
+
+        return sorted(values, key=str.casefold)
 
     def search_managers(self, query: str, limit: int = 25) -> List[Dict[str, str]]:
         limit = self._clamp_limit(limit)
