@@ -5,8 +5,9 @@ import os
 import re
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 import unicodedata
+from urllib.parse import unquote
 
 from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
 
@@ -21,7 +22,7 @@ from .config import (
     save_config,
 )
 from .models import Employee, JobRole, normalize_person_name
-from .storage import load_job_roles
+from .storage import load_job_roles, save_job_roles
 from .sync import run_sync_command
 
 
@@ -64,6 +65,7 @@ def register_routes(app: Flask) -> None:
     @app.route("/config", methods=["GET", "POST"])
     def edit_config() -> str:
         config = _load_app_config(app)
+        roles = _load_roles(config)
 
         if request.method == "POST":
             try:
@@ -85,6 +87,7 @@ def register_routes(app: Flask) -> None:
                     mock_data_file=Path(request.form["mock_data_file"]).expanduser().resolve()
                     if request.form.get("mock_data_file")
                     else None,
+                    group_search_base=request.form.get("group_search_base", "").strip() or None,
                 )
                 sync = SyncConfig(
                     command=request.form.get("sync_command", "").strip(),
@@ -101,7 +104,8 @@ def register_routes(app: Flask) -> None:
             except Exception as exc:  # broad to surface validation errors to the UI
                 flash(f"Unable to save configuration: {exc}", "error")
 
-        return render_template("config.html", config=config)
+        roles_json = [_serialize_role(role) for role in roles.values()]
+        return render_template("config.html", config=config, roles_json=roles_json)
 
     @app.route("/onboard", methods=["GET", "POST"])
     def onboard() -> str:
@@ -110,6 +114,8 @@ def register_routes(app: Flask) -> None:
         managers, ous = _load_directory_context(config)
         companies, offices = _load_reference_values(config)
         email_domain = _email_domain_from_config(config)
+        role_groups = {name: list(role.groups) for name, role in roles.items()}
+        selected_groups = _dedupe_preserve(request.form.getlist("groups"))
 
         if request.method == "POST":
             try:
@@ -131,6 +137,7 @@ def register_routes(app: Flask) -> None:
                 company_name = request.form.get("company", "").strip()
                 office_name = request.form.get("office", "").strip()
                 attributes = _parse_attributes(request.form.get("attributes", ""))
+                selected_groups = _dedupe_preserve(request.form.getlist("groups"))
 
                 if not all([first_name, last_name, username, email, role_name]):
                     raise ValueError("All fields except password and attributes are required.")
@@ -175,6 +182,7 @@ def register_routes(app: Flask) -> None:
                     job_role=role_name,
                     manager_dn=effective_manager,
                     attributes=attributes,
+                    groups=selected_groups,
                 )
 
                 with ADClient(config.ldap) as client:
@@ -206,6 +214,9 @@ def register_routes(app: Flask) -> None:
             generated_username=generated_username,
             companies=companies,
             offices=offices,
+            selected_groups=selected_groups,
+            role_groups=role_groups,
+            job_roles=roles,
         )
 
     @app.get("/api/job-titles")
@@ -423,17 +434,143 @@ def register_routes(app: Flask) -> None:
             payload["error"] = ad_error
         return jsonify(payload)
 
+    @app.get("/api/groups")
+    def api_groups() -> Any:
+        config = _load_app_config(app)
+        query = request.args.get("q", "").strip()
+        limit = _parse_api_limit(request.args.get("limit"))
+
+        items: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+        ad_error: Optional[str] = None
+        try:
+            with ADClient(config.ldap) as client:
+                for group in client.list_groups(query or None, limit):
+                    dn = group.get("distinguishedName")
+                    if not dn or dn in seen:
+                        continue
+                    seen.add(dn)
+                    items.append(
+                        {
+                            "name": group.get("name") or _group_display_name(dn),
+                            "distinguishedName": dn,
+                            "sAMAccountName": group.get("sAMAccountName"),
+                            "description": group.get("description"),
+                        }
+                    )
+        except Exception as exc:  # pragma: no cover - graceful degradation
+            ad_error = str(exc)
+
+        roles = _load_roles(config)
+        lowered = query.lower() if query else None
+        for role in roles.values():
+            for group_dn in role.groups:
+                if not group_dn:
+                    continue
+                normalized = group_dn.strip()
+                if not normalized or normalized in seen:
+                    continue
+                if lowered and lowered not in normalized.lower():
+                    continue
+                seen.add(normalized)
+                items.append(
+                    {
+                        "name": _group_display_name(normalized),
+                        "distinguishedName": normalized,
+                        "sAMAccountName": None,
+                        "description": None,
+                    }
+                )
+                if len(items) >= limit:
+                    break
+            if len(items) >= limit:
+                break
+
+        payload: Dict[str, Any] = {"items": items[:limit]}
+        if ad_error:
+            payload["error"] = ad_error
+        return jsonify(payload)
+
+    @app.get("/api/roles")
+    def api_roles() -> Any:
+        config = _load_app_config(app)
+        roles = _load_roles(config)
+        payload = [_serialize_role(role) for role in roles.values()]
+        return jsonify({"items": payload})
+
+    @app.post("/api/roles")
+    def api_upsert_role() -> Any:
+        data = request.get_json(silent=True) or {}
+        name = str(data.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "Role name is required."}), 400
+
+        config = _load_app_config(app)
+        roles = _load_roles(config)
+
+        original_name = str(data.get("original_name") or "").strip() or None
+        if original_name and original_name != name:
+            roles.pop(original_name, None)
+
+        description = str(data.get("description") or "").strip() or None
+        user_ou = str(data.get("user_ou") or "").strip() or None
+        default_manager_dn = str(data.get("default_manager_dn") or "").strip() or None
+
+        attributes_input = data.get("attributes") or ""
+        try:
+            if isinstance(attributes_input, dict):
+                attributes = {
+                    str(key).strip(): str(value).strip()
+                    for key, value in attributes_input.items()
+                    if str(key).strip()
+                }
+            else:
+                attributes = _parse_attributes(str(attributes_input))
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+        groups_input = data.get("groups") or []
+        groups = _dedupe_preserve(str(value).strip() for value in groups_input)
+
+        role = JobRole(
+            name=name,
+            description=description or None,
+            user_ou=user_ou or None,
+            default_manager_dn=default_manager_dn or None,
+            attributes=attributes,
+            groups=groups,
+        )
+        roles[name] = role
+        save_job_roles(config.storage.job_roles_file, roles)
+
+        return jsonify({"role": _serialize_role(role)})
+
+    @app.delete("/api/roles/<path:role_name>")
+    def api_delete_role(role_name: str) -> Any:
+        decoded = unquote(role_name)
+        config = _load_app_config(app)
+        roles = _load_roles(config)
+        if decoded not in roles:
+            return jsonify({"error": f"Role '{decoded}' not found."}), 404
+
+        roles.pop(decoded, None)
+        save_job_roles(config.storage.job_roles_file, roles)
+        return ("", 204)
+
     @app.route("/clone", methods=["GET", "POST"])
     def clone_user() -> str:
         config = _load_app_config(app)
         roles = _load_roles(config)
         managers, ous = _load_directory_context(config)
         companies, offices = _load_reference_values(config)
+        role_groups = {name: list(role.groups) for name, role in roles.items()}
 
         query = request.args.get("query", "").strip()
         user_dn = request.args.get("user_dn")
         search_results: List[Dict[str, Any]] = []
         selected_user: Optional[Dict[str, Any]] = None
+        template_groups: List[str] = []
+        selected_groups = _dedupe_preserve(request.form.getlist("groups"))
 
         if query:
             try:
@@ -461,6 +598,7 @@ def register_routes(app: Flask) -> None:
                             "physicalDeliveryOfficeName",
                         ],
                     )
+                    template_groups = client.get_user_groups(user_dn)
             except Exception as exc:
                 flash(f"Unable to load selected user: {exc}", "error")
 
@@ -496,6 +634,8 @@ def register_routes(app: Flask) -> None:
                     template_manager_display = template_manager_dn
 
         email_domain = _email_domain_from_config(config)
+        if not selected_groups and template_groups:
+            selected_groups = _dedupe_preserve(template_groups)
 
         if request.method == "POST":
             try:
@@ -517,6 +657,7 @@ def register_routes(app: Flask) -> None:
                 company_name = request.form.get("company", "").strip()
                 office_name = request.form.get("office", "").strip()
                 attributes = _parse_attributes(request.form.get("attributes", ""))
+                selected_groups = _dedupe_preserve(request.form.getlist("groups"))
 
                 if not all([first_name, last_name, username, email, role_name]):
                     raise ValueError("All fields except password and attributes are required.")
@@ -564,6 +705,7 @@ def register_routes(app: Flask) -> None:
                     job_role=role_name,
                     manager_dn=manager_dn,
                     attributes=attributes,
+                    groups=selected_groups,
                 )
 
                 chosen_ou = chosen_ou or role.user_ou
@@ -614,6 +756,9 @@ def register_routes(app: Flask) -> None:
             generated_email=generated_email,
             generated_username=generated_username,
             prefilled_job_role=prefilled_job_role,
+            selected_groups=selected_groups,
+            role_groups=role_groups,
+            job_roles=roles,
         )
 
     @app.route("/delete", methods=["GET", "POST"])
@@ -862,6 +1007,34 @@ def _derive_username(first_name: str, last_name: str) -> str:
     if len(filtered) == 1:
         return filtered[0]
     return ".".join(filtered)
+
+
+def _serialize_role(role: JobRole) -> Dict[str, Any]:
+    return {
+        "name": role.name,
+        "description": role.description,
+        "user_ou": role.user_ou,
+        "default_manager_dn": role.default_manager_dn,
+        "attributes": dict(role.attributes),
+        "groups": list(role.groups),
+    }
+
+
+def _dedupe_preserve(values: Iterable[str]) -> List[str]:
+    seen: set[str] = set()
+    result: List[str] = []
+    for value in values:
+        if not value:
+            continue
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
+
+
+def _group_display_name(distinguished_name: str) -> str:
+    match = re.match(r"CN=([^,]+)", distinguished_name, re.IGNORECASE)
+    return match.group(1) if match else distinguished_name
 
 
 def _trigger_sync(config: AppConfig) -> None:

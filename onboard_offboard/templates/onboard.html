@@ -76,6 +76,24 @@
       <div class="hint">Pick an existing role or enter a new job title.</div>
     </div>
     <div class="field">
+      <label for="group_search">Groups</label>
+      <div id="group_tags" class="tag-list"></div>
+      <div class="autocomplete">
+        <input
+          id="group_search"
+          type="text"
+          placeholder="Search for groups"
+          autocomplete="off"
+        />
+        <div class="autocomplete-results" id="group_results" hidden></div>
+      </div>
+      <button type="button" class="inline-button" id="apply_role_groups">Apply role groups</button>
+      <div class="hint">
+        Role defaults are added automatically. Search to include additional groups or remove tags to exclude them.
+      </div>
+      <div id="group_hidden_inputs"></div>
+    </div>
+    <div class="field">
       <label for="password">Temporary Password (optional)</label>
       <input id="password" name="password" type="password" />
     </div>
@@ -290,6 +308,183 @@
           clearResults();
         });
       };
+
+      const jobRoleInput = document.getElementById("job_role");
+      const roleGroups = {{ role_groups|tojson }};
+      const initialGroups = {{ selected_groups|tojson }};
+      const groupTags = document.getElementById("group_tags");
+      const groupSearchInput = document.getElementById("group_search");
+      const groupResults = document.getElementById("group_results");
+      const groupHiddenInputs = document.getElementById("group_hidden_inputs");
+      const applyRoleGroupsButton = document.getElementById("apply_role_groups");
+
+      const formatGroupLabel = (value, friendly) => {
+        if (friendly) {
+          return friendly;
+        }
+        if (!value) {
+          return "";
+        }
+        const match = value.match(/CN=([^,]+)/i);
+        return match ? match[1] : value;
+      };
+
+      const selectedGroupMap = new Map();
+
+      const renderGroups = () => {
+        if (!groupTags || !groupHiddenInputs) {
+          return;
+        }
+        groupTags.innerHTML = "";
+        groupHiddenInputs.innerHTML = "";
+        selectedGroupMap.forEach(({ value, label }) => {
+          const tag = document.createElement("span");
+          tag.className = "tag";
+          const labelSpan = document.createElement("span");
+          labelSpan.textContent = label;
+          const removeBtn = document.createElement("button");
+          removeBtn.type = "button";
+          removeBtn.className = "tag-remove";
+          removeBtn.innerHTML = "&times;";
+          removeBtn.setAttribute("aria-label", `Remove ${label}`);
+          removeBtn.addEventListener("click", () => {
+            selectedGroupMap.delete(value);
+            renderGroups();
+          });
+          tag.appendChild(labelSpan);
+          tag.appendChild(removeBtn);
+          groupTags.appendChild(tag);
+
+          const hidden = document.createElement("input");
+          hidden.type = "hidden";
+          hidden.name = "groups";
+          hidden.value = value;
+          groupHiddenInputs.appendChild(hidden);
+        });
+        groupTags.hidden = selectedGroupMap.size === 0;
+      };
+
+      const addGroup = (value, label, silent = false) => {
+        if (!value || selectedGroupMap.has(value)) {
+          return;
+        }
+        selectedGroupMap.set(value, {
+          value,
+          label: formatGroupLabel(value, label),
+        });
+        if (!silent) {
+          renderGroups();
+        }
+      };
+
+      const setGroups = (values) => {
+        selectedGroupMap.clear();
+        (values || []).forEach((value) => {
+          if (!value) {
+            return;
+          }
+          addGroup(value, undefined, true);
+        });
+        renderGroups();
+      };
+
+      setGroups(initialGroups);
+
+      const applyRoleGroups = () => {
+        if (!jobRoleInput) {
+          return;
+        }
+        const roleName = jobRoleInput.value.trim();
+        if (!roleName) {
+          renderGroups();
+          return;
+        }
+        const defaults = roleGroups[roleName] || [];
+        let changed = false;
+        defaults.forEach((value) => {
+          if (!value) {
+            return;
+          }
+          if (!selectedGroupMap.has(value)) {
+            addGroup(value, undefined, true);
+            changed = true;
+          }
+        });
+        if (changed) {
+          renderGroups();
+        }
+      };
+
+      jobRoleInput?.addEventListener("change", applyRoleGroups);
+      jobRoleInput?.addEventListener("blur", applyRoleGroups);
+      applyRoleGroupsButton?.addEventListener("click", () => {
+        applyRoleGroups();
+        groupSearchInput?.focus();
+      });
+
+      let groupSearchTimer;
+      const clearGroupResults = () => {
+        if (!groupResults) {
+          return;
+        }
+        groupResults.innerHTML = "";
+        groupResults.hidden = true;
+      };
+
+      groupSearchInput?.addEventListener("input", () => {
+        if (!groupSearchInput) {
+          return;
+        }
+        const term = groupSearchInput.value.trim();
+        clearTimeout(groupSearchTimer);
+        if (!term) {
+          clearGroupResults();
+          return;
+        }
+        groupSearchTimer = window.setTimeout(async () => {
+          try {
+            const payload = await fetchJson("/api/groups", term);
+            const items = payload.items || [];
+            if (!groupResults) {
+              return;
+            }
+            groupResults.innerHTML = "";
+            items.forEach((item) => {
+              const dn = item.distinguishedName;
+              if (!dn) {
+                return;
+              }
+              const div = document.createElement("div");
+              div.className = "autocomplete-item";
+              div.textContent = item.name || formatGroupLabel(dn);
+              div.addEventListener("mousedown", (event) => {
+                event.preventDefault();
+                addGroup(dn, item.name || formatGroupLabel(dn));
+                renderGroups();
+                if (groupSearchInput) {
+                  groupSearchInput.value = "";
+                }
+                clearGroupResults();
+              });
+              groupResults.appendChild(div);
+            });
+            groupResults.hidden = groupResults.children.length === 0;
+          } catch (error) {
+            console.error(error);
+            clearGroupResults();
+          }
+        }, 200);
+      });
+      groupSearchInput?.addEventListener("keydown", (event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+        }
+      });
+      groupSearchInput?.addEventListener("blur", () => {
+        window.setTimeout(clearGroupResults, 150);
+      });
+
+      applyRoleGroups();
 
       const domain = {{ (email_domain or '')|tojson }};
       const emailInput = document.getElementById("email");

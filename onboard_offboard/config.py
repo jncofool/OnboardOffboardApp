@@ -30,6 +30,7 @@ class LDAPConfig:
     manager_search_filter: str = "(objectClass=user)"
     manager_attributes: tuple[str, ...] = ("displayName", "mail", "title")
     mock_data_file: Optional[Path] = None
+    group_search_base: Optional[str] = None
 
 
 @dataclass
@@ -206,6 +207,7 @@ def load_config(path: Optional[Path] = None) -> AppConfig:
                 )
             ),
             mock_data_file=_optional_path(ldap_section.get("mock_data_file")),
+            group_search_base=(ldap_section.get("group_search_base") or None),
         )
     except KeyError as exc:
         raise ConfigurationError(f"Missing LDAP configuration key: {exc}.") from exc
@@ -243,6 +245,11 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
             **(
                 {"mock_data_file": str(config.ldap.mock_data_file)}
                 if config.ldap.mock_data_file
+                else {}
+            ),
+            **(
+                {"group_search_base": config.ldap.group_search_base}
+                if config.ldap.group_search_base
                 else {}
             ),
         },

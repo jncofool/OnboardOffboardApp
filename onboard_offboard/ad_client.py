@@ -4,7 +4,7 @@ from __future__ import annotations
 import contextlib
 import copy
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterable, Iterator, List, Optional
 
 import yaml
 from ldap3 import ALL, BASE, LEVEL, MODIFY_REPLACE, SUBTREE, Connection, Server
@@ -22,6 +22,7 @@ class MockDirectory:
             "managers": [],
             "tree": {},
             "users": [],
+            "groups": [],
         }
         self._load()
 
@@ -32,6 +33,10 @@ class MockDirectory:
         elif not self._data.get("tree"):
             # Provide a sensible default tree if none supplied.
             self._data["tree"] = {"name": "", "children": []}
+        self._data.setdefault("managers", [])
+        self._data.setdefault("tree", {"name": "", "children": []})
+        self._data.setdefault("users", [])
+        self._data.setdefault("groups", [])
 
     def _save(self) -> None:
         if not self.data_file:
@@ -42,6 +47,25 @@ class MockDirectory:
 
     def list_managers(self) -> List[Dict[str, str]]:
         return [dict(manager) for manager in self._data.get("managers", [])]
+
+    def list_groups(self, query: Optional[str] = None, limit: int = 25) -> List[Dict[str, str]]:
+        groups: List[Dict[str, str]] = []
+        lowered_query = query.lower() if query else None
+        for group in self._data.get("groups", []):
+            name = str(group.get("name") or "")
+            dn = str(group.get("distinguished_name") or "")
+            if lowered_query and lowered_query not in f"{name} {dn}".lower():
+                continue
+            groups.append(
+                {
+                    "name": name,
+                    "distinguishedName": dn,
+                    "description": group.get("description"),
+                }
+            )
+            if len(groups) >= limit:
+                break
+        return groups
 
     def list_job_titles(self, query: Optional[str] = None, limit: int = 25) -> List[str]:
         titles: List[str] = []
@@ -157,11 +181,31 @@ class MockDirectory:
     def add_user(self, distinguished_name: str, attributes: Dict[str, Any]) -> None:
         users = self._data.setdefault("users", [])
         existing = next((user for user in users if user.get("distinguished_name") == distinguished_name), None)
-        payload = {"distinguished_name": distinguished_name, "attributes": dict(attributes)}
+        attrs = dict(attributes)
+        attrs.setdefault("memberOf", list(attributes.get("memberOf", [])))
+        payload = {"distinguished_name": distinguished_name, "attributes": attrs}
         if existing:
             existing.update(payload)
         else:
             users.append(payload)
+        self._save()
+
+    def get_user_groups(self, distinguished_name: str) -> List[str]:
+        for user in self._data.get("users", []):
+            if user.get("distinguished_name") == distinguished_name:
+                groups = user.get("attributes", {}).get("memberOf", []) or []
+                return [str(value) for value in groups]
+        return []
+
+    def add_user_to_groups(self, distinguished_name: str, groups: Iterable[str]) -> None:
+        users = self._data.setdefault("users", [])
+        target = next((user for user in users if user.get("distinguished_name") == distinguished_name), None)
+        if not target:
+            return
+        attrs = target.setdefault("attributes", {})
+        existing = set(str(value) for value in attrs.get("memberOf", []) or [])
+        updated = list(existing.union(str(g) for g in groups if g))
+        attrs["memberOf"] = updated
         self._save()
 
     def update_manager(self, user_dn: str, manager_dn: str) -> None:
@@ -266,7 +310,7 @@ class ADClient:
             return self._mock_directory.list_job_titles(query, limit)
 
         assert self.connection is not None
-        base_dn = self.config.base_dn
+        base_dn = self.config.group_search_base or self.config.base_dn
         if query:
             escaped = self._escape_filter_value(query)
             filter_str = f"(&(objectClass=user)(title=*{escaped}*))"
@@ -302,7 +346,7 @@ class ADClient:
             return self._mock_directory.list_companies(query, limit)
 
         assert self.connection is not None
-        base_dn = self.config.base_dn
+        base_dn = self.config.group_search_base or self.config.base_dn
         if query:
             escaped = self._escape_filter_value(query)
             filter_str = f"(&(objectClass=user)(company=*{escaped}*))"
@@ -332,13 +376,58 @@ class ADClient:
         companies.sort()
         return companies
 
+    def list_groups(self, query: Optional[str] = None, limit: int = 25) -> List[Dict[str, str]]:
+        limit = self._clamp_limit(limit)
+        if self._mock_directory:
+            return self._mock_directory.list_groups(query, limit)
+
+        assert self.connection is not None
+        base_dn = self.config.group_search_base or self.config.base_dn
+        if query:
+            escaped = self._escape_filter_value(query)
+            filter_str = (
+                f"(&"
+                f"(objectClass=group)"
+                f"(|(cn=*{escaped}*)(name=*{escaped}*)(sAMAccountName=*{escaped}*))"
+                f")"
+            )
+        else:
+            filter_str = "(objectClass=group)"
+
+        self.connection.search(
+            search_base=base_dn,
+            search_filter=filter_str,
+            search_scope=SUBTREE,
+            attributes=["cn", "distinguishedName", "sAMAccountName", "description"],
+            size_limit=limit,
+        )
+
+        groups: List[Dict[str, str]] = []
+        seen = set()
+        for entry in self.connection.entries:
+            dn = str(entry.entry_dn)
+            if dn in seen:
+                continue
+            seen.add(dn)
+            groups.append(
+                {
+                    "name": str(entry.get("cn", dn)),
+                    "distinguishedName": dn,
+                    "sAMAccountName": str(entry.get("sAMAccountName") or ""),
+                    "description": str(entry.get("description") or ""),
+                }
+            )
+            if len(groups) >= limit:
+                break
+        return groups
+
     def list_offices(self, query: Optional[str] = None, limit: int = 25) -> List[str]:
         limit = self._clamp_limit(limit)
         if self._mock_directory:
             return self._mock_directory.list_offices(query, limit)
 
         assert self.connection is not None
-        base_dn = self.config.base_dn
+        base_dn = self.config.group_search_base or self.config.base_dn
         attribute = "physicalDeliveryOfficeName"
         if query:
             escaped = self._escape_filter_value(query)
@@ -377,7 +466,7 @@ class ADClient:
             return self._mock_directory.search_managers(query, limit)
 
         assert self.connection is not None
-        base_dn = self.config.base_dn
+        base_dn = self.config.group_search_base or self.config.base_dn
         filter_str = self.config.manager_search_filter or "(objectClass=user)"
         escaped = self._escape_filter_value(query)
         combined_filter = f"(&{filter_str}(|(displayName=*{escaped}*)(sAMAccountName=*{escaped}*)(mail=*{escaped}*)))"
@@ -411,7 +500,7 @@ class ADClient:
             return self._mock_directory.search_organizational_units(query, limit)
 
         assert self.connection is not None
-        base_dn = self.config.base_dn
+        base_dn = self.config.group_search_base or self.config.base_dn
         if query:
             escaped = self._escape_filter_value(query)
             filter_str = f"(&(objectClass=organizationalUnit)(ou=*{escaped}*))"
@@ -531,6 +620,10 @@ class ADClient:
                         + (f" {message}" if message else "")
                     )
 
+        groups = [group for group in dict.fromkeys(employee.groups) if group]
+        if groups:
+            self.add_user_to_groups(distinguished_name, groups)
+
         return {
             "distinguished_name": distinguished_name,
             "sAMAccountName": employee.username,
@@ -542,6 +635,46 @@ class ADClient:
             return
         assert self.connection is not None
         self.connection.modify(user_dn, {"manager": [(MODIFY_REPLACE, [manager_dn])]})
+
+    def get_user_groups(self, user_dn: str) -> List[str]:
+        if self._mock_directory:
+            return self._mock_directory.get_user_groups(user_dn)
+
+        assert self.connection is not None
+        self.connection.search(
+            search_base=user_dn,
+            search_filter="(objectClass=user)",
+            search_scope=BASE,
+            attributes=["memberOf"],
+        )
+        if not self.connection.entries:
+            return []
+        entry = self.connection.entries[0]
+        if "memberOf" not in entry:
+            return []
+        values = entry["memberOf"].value
+        if isinstance(values, (list, tuple)):
+            return [str(value) for value in values]
+        return [str(values)]
+
+    def add_user_to_groups(self, user_dn: str, groups: Iterable[str]) -> None:
+        unique_groups = [group for group in dict.fromkeys(groups) if group]
+        if not unique_groups:
+            return
+        if self._mock_directory:
+            self._mock_directory.add_user_to_groups(user_dn, unique_groups)
+            return
+
+        assert self.connection is not None
+        added = self.connection.extend.microsoft.add_members_to_groups([user_dn], unique_groups)
+        if not added:
+            result = self.connection.result or {}
+            description = result.get("description", "Unknown error")
+            message = result.get("message")
+            raise RuntimeError(
+                f"Unable to assign groups to {user_dn} ({description})."
+                + (f" {message}" if message else "")
+            )
 
     # User discovery ------------------------------------------------------
     def search_users(

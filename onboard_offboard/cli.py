@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import typer
 
@@ -38,10 +38,15 @@ def add_role(
     default_manager_dn: Optional[str] = typer.Option(
         None, "--manager-dn", help="Distinguished name of the default manager."
     ),
-    attribute: Optional[list[str]] = typer.Option(
+    attribute: Optional[List[str]] = typer.Option(
         None,
         "--attribute",
         help="Additional attribute in key=value form. May be provided multiple times.",
+    ),
+    group: Optional[List[str]] = typer.Option(
+        None,
+        "--group",
+        help="Distinguished name of an AD group to include with this role. May be provided multiple times.",
     ),
     config_path: Optional[Path] = typer.Option(
         None, "--config", help="Path to a specific settings file (overrides default)."
@@ -59,6 +64,7 @@ def add_role(
                 raise typer.BadParameter("Attributes must be provided in key=value form.")
             key, value = item.split("=", 1)
             attributes[key] = value
+    groups = list(dict.fromkeys(group or []))
 
     role = JobRole(
         name=name,
@@ -66,6 +72,7 @@ def add_role(
         user_ou=user_ou,
         default_manager_dn=default_manager_dn,
         attributes=attributes,
+        groups=groups,
     )
     roles[name] = role
     save_job_roles(config.storage.job_roles_file, roles)
@@ -98,6 +105,10 @@ def list_roles(
         if role.attributes:
             for key, value in role.attributes.items():
                 typer.echo(f"    {key}: {value}")
+        if role.groups:
+            typer.echo("    groups:")
+            for group_dn in role.groups:
+                typer.echo(f"      - {group_dn}")
 
 
 @app.command("managers")
@@ -152,6 +163,11 @@ def onboard_user(
         hide_input=True,
         confirmation_prompt=True,
     ),
+    extra_group: Optional[List[str]] = typer.Option(
+        None,
+        "--group",
+        help="Additional group DN to assign to the user (repeatable).",
+    ),
     config_path: Optional[Path] = typer.Option(
         None, "--config", help="Path to a specific settings file (overrides default)."
     ),
@@ -172,6 +188,8 @@ def onboard_user(
         typer.echo("Manager DN must be supplied either on the command line or via the job role.")
         raise typer.Exit(code=1)
 
+    groups = list(dict.fromkeys([*(role.groups or []), *(extra_group or [])]))
+
     employee = Employee(
         first_name=first_name,
         last_name=last_name,
@@ -179,6 +197,7 @@ def onboard_user(
         email=email,
         job_role=job_role,
         manager_dn=effective_manager,
+        groups=groups,
     )
 
     with ADClient(config.ldap) as client:

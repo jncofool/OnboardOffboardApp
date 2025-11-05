@@ -18,6 +18,16 @@ tree:
       children: []
   - name: OU=Contractors,DC=example,DC=com
     children: []
+groups:
+- name: Field Support
+  distinguished_name: CN=Field Support,OU=Groups,DC=example,DC=com
+  description: Baseline access for field technicians.
+- name: Mobile Device Users
+  distinguished_name: CN=Mobile Device Users,OU=Groups,DC=example,DC=com
+  description: Assigned corporate mobile devices.
+- name: Corporate HQ
+  distinguished_name: CN=Corporate HQ,OU=Groups,DC=example,DC=com
+  description: Corporate office staff group.
 users:
 - distinguished_name: CN=Mark Daneshvar,Amano Mcgann
   attributes:
@@ -32,3 +42,6 @@ users:
     telephoneNumber: '16512109176'
     manager: CN=Alex Johnson,OU=Management,DC=example,DC=com
     userAccountControl: 512
+    memberOf:
+      - CN=Field Support,OU=Groups,DC=example,DC=com
+      - CN=Mobile Device Users,OU=Groups,DC=example,DC=com

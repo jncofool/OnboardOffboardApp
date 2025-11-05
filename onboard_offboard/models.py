@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 def normalize_person_name(raw: str) -> str:
@@ -23,6 +23,7 @@ class JobRole:
     user_ou: Optional[str] = None
     default_manager_dn: Optional[str] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
+    groups: List[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "JobRole":
@@ -32,6 +33,7 @@ class JobRole:
             user_ou=data.get("user_ou"),
             default_manager_dn=data.get("default_manager_dn"),
             attributes=dict(data.get("attributes", {})),
+            groups=list(data.get("groups", [])),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -41,6 +43,7 @@ class JobRole:
             "user_ou": self.user_ou,
             "default_manager_dn": self.default_manager_dn,
             "attributes": dict(self.attributes),
+            "groups": list(self.groups),
         }
 
 
@@ -55,6 +58,7 @@ class Employee:
     job_role: str
     manager_dn: Optional[str] = None
     attributes: Dict[str, Any] = field(default_factory=dict)
+    groups: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.first_name = normalize_person_name(self.first_name)

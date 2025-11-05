@@ -2,7 +2,8 @@
 {% block title %}Configuration · Onboard &amp; Offboard{% endblock %}
 {% block content %}
   <h1>Directory Configuration</h1>
-  <p>Update the connection details and sync command used by the portal.</p>
+  <p>Update the connection details, sync command, and reusable job role templates used by the portal.</p>
+
   <form method="post">
     <section>
       <h2>Active Directory</h2>
@@ -38,6 +39,10 @@
         <input id="manager_attributes" name="manager_attributes" type="text" value="{{ config.ldap.manager_attributes | join(', ') }}" />
       </div>
       <div class="field">
+        <label for="group_search_base">Group Search Base (optional)</label>
+        <input id="group_search_base" name="group_search_base" type="text" value="{{ config.ldap.group_search_base or '' }}" placeholder="OU=User Groups,DC=example,DC=com" />
+      </div>
+      <div class="field">
         <label for="mock_data_file">Mock Directory File (optional)</label>
         <input id="mock_data_file" name="mock_data_file" type="text" value="{{ config.ldap.mock_data_file or '' }}" />
       </div>
@@ -70,4 +75,576 @@
       <button type="submit">Save Configuration</button>
     </div>
   </form>
+
+  <section id="role_management">
+    <h2>Job Roles &amp; Groups</h2>
+    <p>
+      Manage reusable job role templates. Defaults set here appear during onboarding and cloning, but you can still add or remove groups per user.
+    </p>
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 20%;">Name</th>
+          <th style="width: 25%;">Default Manager</th>
+          <th style="width: 15%;">Groups</th>
+          <th>Notes</th>
+          <th style="width: 15%;">Actions</th>
+        </tr>
+      </thead>
+      <tbody id="role_table_body">
+        <tr>
+          <td colspan="5">Loading roles…</td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="field" style="margin-top: 1rem;">
+      <button type="button" id="role_new_button">Create Role</button>
+    </div>
+
+    <form id="role_form" class="card" autocomplete="off">
+      <h3 id="role_form_heading">Add Role</h3>
+      <input type="hidden" id="role_original_name" />
+      <div class="field">
+        <label for="role_name">Role Name</label>
+        <input id="role_name" type="text" required />
+      </div>
+      <div class="field">
+        <label for="role_description">Description (optional)</label>
+        <input id="role_description" type="text" />
+      </div>
+      <div class="field">
+        <label for="role_user_ou">Default User OU</label>
+        <input id="role_user_ou" type="text" list="role-ou-suggestions" placeholder="Leave blank to use global default" />
+        <datalist id="role-ou-suggestions"></datalist>
+      </div>
+      <div class="field">
+        <label for="role_manager_search">Default Manager (optional)</label>
+        <div class="autocomplete">
+          <input
+            id="role_manager_search"
+            type="text"
+            placeholder="Search by name, username, or email"
+            autocomplete="off"
+          />
+          <input id="role_manager_dn" type="hidden" />
+          <div class="autocomplete-results" id="role_manager_results" hidden></div>
+        </div>
+        <button type="button" class="inline-button" id="role_manager_clear">Clear</button>
+      </div>
+      <div class="field">
+        <label for="role_attributes">Attributes (key=value per line, optional)</label>
+        <textarea id="role_attributes" placeholder="title=Field Service Technician"></textarea>
+      </div>
+      <div class="field">
+        <label for="role_group_search">Default Groups</label>
+        <div id="role_group_tags" class="tag-list" hidden></div>
+        <div class="autocomplete">
+          <input
+            id="role_group_search"
+            type="text"
+            placeholder="Search for groups"
+            autocomplete="off"
+          />
+          <div class="autocomplete-results" id="role_group_results" hidden></div>
+        </div>
+        <div class="hint">Search to add groups. Click the × on a tag to remove it.</div>
+      </div>
+      <div class="field" id="role_form_message" hidden></div>
+      <div class="field">
+        <button type="submit">Save Role</button>
+        <button type="button" class="inline-button" id="role_reset_button">Reset</button>
+      </div>
+    </form>
+  </section>
+
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const initialRoles = {{ roles_json|tojson }};
+      const state = {
+        roles: Array.isArray(initialRoles) ? [...initialRoles] : [],
+      };
+
+      const fetchJson = async (endpoint, query, limit = 20) => {
+        const url = new URL(endpoint, window.location.origin);
+        if (query) {
+          url.searchParams.set("q", query);
+        }
+        if (limit) {
+          url.searchParams.set("limit", limit);
+        }
+        const response = await fetch(url.toString(), {
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) {
+          throw new Error(`Directory lookup failed (${response.status})`);
+        }
+        return response.json();
+      };
+
+      const wireDatalist = (input, datalist, endpoint) => {
+        if (!input || !datalist) {
+          return;
+        }
+        let timer;
+        input.addEventListener("input", () => {
+          clearTimeout(timer);
+          const value = input.value.trim();
+          if (value.length < 2) {
+            return;
+          }
+          timer = setTimeout(async () => {
+            try {
+              const payload = await fetchJson(endpoint, value);
+              datalist.innerHTML = "";
+              (payload.items || []).forEach((item) => {
+                if (!item) {
+                  return;
+                }
+                const option = document.createElement("option");
+                option.value = item;
+                datalist.appendChild(option);
+              });
+            } catch (error) {
+              console.error(error);
+            }
+          }, 200);
+        });
+      };
+
+      const createManagerAutocomplete = (input, hidden, results, clearButton) => {
+        if (!input || !hidden || !results) {
+          return () => {};
+        }
+
+        const clearResults = () => {
+          results.innerHTML = "";
+          results.hidden = true;
+        };
+
+        let timer;
+        input.addEventListener("input", () => {
+          clearTimeout(timer);
+          const value = input.value.trim();
+          hidden.value = "";
+          if (!value) {
+            clearResults();
+            return;
+          }
+          timer = setTimeout(async () => {
+            try {
+              const payload = await fetchJson("/api/managers", value);
+              const items = payload.items || [];
+              results.innerHTML = "";
+              items.forEach((item) => {
+                const div = document.createElement("div");
+                div.className = "autocomplete-item";
+                const pieces = [
+                  item.displayName,
+                  item.title,
+                  item.mail,
+                  item.sAMAccountName,
+                ].filter(Boolean);
+                div.textContent = pieces.join(" ").trim() || item.distinguishedName;
+                div.dataset.dn = item.distinguishedName;
+                div.dataset.display = div.textContent;
+                div.addEventListener("mousedown", (event) => {
+                  event.preventDefault();
+                  hidden.value = div.dataset.dn;
+                  input.value = div.dataset.display || div.dataset.dn;
+                  clearResults();
+                });
+                results.appendChild(div);
+              });
+              results.hidden = results.children.length === 0;
+            } catch (error) {
+              console.error(error);
+              clearResults();
+            }
+          }, 200);
+        });
+        input.addEventListener("blur", () => {
+          setTimeout(clearResults, 150);
+        });
+        clearButton?.addEventListener("click", () => {
+          input.value = "";
+          hidden.value = "";
+          clearResults();
+        });
+
+        return (label, dn) => {
+          input.value = label || dn || "";
+          hidden.value = dn || "";
+        };
+      };
+
+      const formatAttributesTextarea = (attributes) => {
+        if (!attributes) {
+          return "";
+        }
+        return Object.entries(attributes)
+          .map(([key, value]) => `${key}=${value}`)
+          .join("\n");
+      };
+
+      const parseAttributesTextarea = (value) => {
+        const result = {};
+        const lines = (value || "").split(/\r?\n/);
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || trimmed.startsWith("#")) {
+            continue;
+          }
+          const index = trimmed.indexOf("=");
+          if (index === -1) {
+            throw new Error("Attributes must be key=value, one per line.");
+          }
+          const key = trimmed.slice(0, index).trim();
+          const val = trimmed.slice(index + 1).trim();
+          if (key) {
+            result[key] = val;
+          }
+        }
+        return result;
+      };
+
+      const createGroupPicker = (tagsEl, searchInput, resultsEl) => {
+        const map = new Map();
+
+        const render = () => {
+          if (!tagsEl) {
+            return;
+          }
+          tagsEl.innerHTML = "";
+          map.forEach(({ value, label }) => {
+            const tag = document.createElement("span");
+            tag.className = "tag";
+            const text = document.createElement("span");
+            text.textContent = label;
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "tag-remove";
+            remove.innerHTML = "&times;";
+            remove.setAttribute("aria-label", `Remove ${label}`);
+            remove.addEventListener("click", () => {
+              map.delete(value);
+              render();
+            });
+            tag.appendChild(text);
+            tag.appendChild(remove);
+            tagsEl.appendChild(tag);
+          });
+          tagsEl.hidden = map.size === 0;
+        };
+
+        const add = (value, label, silent = false) => {
+          const normalized = (value || "").trim();
+          if (!normalized || map.has(normalized)) {
+            return;
+          }
+          const friendly = label || normalized;
+          map.set(normalized, {
+            value: normalized,
+            label: friendly,
+          });
+          if (!silent) {
+            render();
+          }
+        };
+
+        const set = (values) => {
+          map.clear();
+          (values || []).forEach((value) => add(value, undefined, true));
+          render();
+        };
+
+        const get = () => Array.from(map.keys());
+
+        if (searchInput && resultsEl) {
+          const clearResults = () => {
+            resultsEl.innerHTML = "";
+            resultsEl.hidden = true;
+          };
+
+          let timer;
+          searchInput.addEventListener("input", () => {
+            clearTimeout(timer);
+            const term = searchInput.value.trim();
+            if (!term) {
+              clearResults();
+              return;
+            }
+            timer = setTimeout(async () => {
+              try {
+                const payload = await fetchJson("/api/groups", term);
+                const items = payload.items || [];
+                resultsEl.innerHTML = "";
+                items.forEach((item) => {
+                  const dn = item.distinguishedName;
+                  if (!dn) {
+                    return;
+                  }
+                  const div = document.createElement("div");
+                  div.className = "autocomplete-item";
+                  div.textContent = item.name || dn;
+                  div.addEventListener("mousedown", (event) => {
+                    event.preventDefault();
+                    add(dn, item.name || dn);
+                    render();
+                    searchInput.value = "";
+                    clearResults();
+                  });
+                  resultsEl.appendChild(div);
+                });
+                resultsEl.hidden = resultsEl.children.length === 0;
+              } catch (error) {
+                console.error(error);
+                clearResults();
+              }
+            }, 200);
+          });
+          searchInput.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+            }
+          });
+          searchInput.addEventListener("blur", () => {
+            window.setTimeout(clearResults, 150);
+          });
+        }
+
+        return { add, set, get };
+      };
+
+      const roleTableBody = document.getElementById("role_table_body");
+      const roleNewButton = document.getElementById("role_new_button");
+      const roleForm = document.getElementById("role_form");
+      const roleFormHeading = document.getElementById("role_form_heading");
+      const roleOriginalNameInput = document.getElementById("role_original_name");
+      const roleNameInput = document.getElementById("role_name");
+      const roleDescriptionInput = document.getElementById("role_description");
+      const roleUserOuInput = document.getElementById("role_user_ou");
+      const roleUserOuDatalist = document.getElementById("role-ou-suggestions");
+      const roleManagerSearchInput = document.getElementById("role_manager_search");
+      const roleManagerDnInput = document.getElementById("role_manager_dn");
+      const roleManagerResults = document.getElementById("role_manager_results");
+      const roleManagerClear = document.getElementById("role_manager_clear");
+      const roleAttributesInput = document.getElementById("role_attributes");
+      const roleGroupTags = document.getElementById("role_group_tags");
+      const roleGroupSearchInput = document.getElementById("role_group_search");
+      const roleGroupResults = document.getElementById("role_group_results");
+      const roleMessage = document.getElementById("role_form_message");
+      const roleResetButton = document.getElementById("role_reset_button");
+
+      const setRoleMessage = (text, variant = "success") => {
+        if (!roleMessage) {
+          return;
+        }
+        if (!text) {
+          roleMessage.hidden = true;
+          roleMessage.textContent = "";
+          roleMessage.className = "field";
+          return;
+        }
+        roleMessage.hidden = false;
+        roleMessage.textContent = text;
+        roleMessage.className = `field flash ${variant}`;
+      };
+
+      wireDatalist(roleUserOuInput, roleUserOuDatalist, "/api/ous");
+      const setManagerField = createManagerAutocomplete(
+        roleManagerSearchInput,
+        roleManagerDnInput,
+        roleManagerResults,
+        roleManagerClear
+      );
+      const roleGroupPicker = createGroupPicker(roleGroupTags, roleGroupSearchInput, roleGroupResults);
+
+      const resetRoleForm = () => {
+        roleFormHeading.textContent = "Add Role";
+        roleOriginalNameInput.value = "";
+        roleNameInput.value = "";
+        roleDescriptionInput.value = "";
+        roleUserOuInput.value = "";
+        setManagerField("", "");
+        roleAttributesInput.value = "";
+        roleGroupPicker.set([]);
+        setRoleMessage("");
+      };
+
+      const upsertRoleLocal = (role, originalName) => {
+        if (!role) {
+          return;
+        }
+        const targetName = role.name;
+        const existingIndex = state.roles.findIndex((item) => item.name === targetName);
+        if (existingIndex >= 0) {
+          state.roles.splice(existingIndex, 1, role);
+        } else {
+          if (originalName && originalName !== targetName) {
+            const oldIndex = state.roles.findIndex((item) => item.name === originalName);
+            if (oldIndex >= 0) {
+              state.roles.splice(oldIndex, 1);
+            }
+          }
+          state.roles.push(role);
+        }
+        state.roles.sort((a, b) => a.name.localeCompare(b.name));
+      };
+
+      const removeRoleLocal = (name) => {
+        const index = state.roles.findIndex((item) => item.name === name);
+        if (index >= 0) {
+          state.roles.splice(index, 1);
+        }
+      };
+
+      const renderRoleTable = () => {
+        if (!roleTableBody) {
+          return;
+        }
+        if (state.roles.length === 0) {
+          roleTableBody.innerHTML = "<tr><td colspan='5'>No roles have been configured yet.</td></tr>";
+          return;
+        }
+        roleTableBody.innerHTML = "";
+        state.roles.forEach((role) => {
+          const row = document.createElement("tr");
+          row.dataset.roleName = role.name;
+
+          const nameCell = document.createElement("td");
+          nameCell.textContent = role.name;
+          row.appendChild(nameCell);
+
+          const managerCell = document.createElement("td");
+          managerCell.textContent = role.default_manager_dn || "";
+          row.appendChild(managerCell);
+
+          const groupsCell = document.createElement("td");
+          groupsCell.textContent = String(role.groups?.length || 0);
+          row.appendChild(groupsCell);
+
+          const notesCell = document.createElement("td");
+          notesCell.textContent = role.description || "";
+          row.appendChild(notesCell);
+
+          const actionsCell = document.createElement("td");
+          const editButton = document.createElement("button");
+          editButton.type = "button";
+          editButton.className = "button secondary role-edit";
+          editButton.dataset.roleName = role.name;
+          editButton.textContent = "Edit";
+          actionsCell.appendChild(editButton);
+
+          const deleteButton = document.createElement("button");
+          deleteButton.type = "button";
+          deleteButton.className = "button secondary role-delete";
+          deleteButton.dataset.roleName = role.name;
+          deleteButton.textContent = "Delete";
+          deleteButton.style.marginLeft = "0.5rem";
+          actionsCell.appendChild(deleteButton);
+
+          row.appendChild(actionsCell);
+          roleTableBody.appendChild(row);
+        });
+      };
+
+      const loadRoleIntoForm = (role) => {
+        roleFormHeading.textContent = `Edit Role: ${role.name}`;
+        roleOriginalNameInput.value = role.name;
+        roleNameInput.value = role.name;
+        roleDescriptionInput.value = role.description || "";
+        roleUserOuInput.value = role.user_ou || "";
+        setManagerField(role.default_manager_dn, role.default_manager_dn);
+        roleAttributesInput.value = formatAttributesTextarea(role.attributes);
+        roleGroupPicker.set(role.groups || []);
+        setRoleMessage("");
+        roleNameInput.focus();
+      };
+
+      roleTableBody?.addEventListener("click", async (event) => {
+        const editButton = event.target.closest(".role-edit");
+        if (editButton) {
+          const name = editButton.dataset.roleName;
+          const role = state.roles.find((item) => item.name === name);
+          if (role) {
+            loadRoleIntoForm(role);
+          }
+          return;
+        }
+        const deleteButton = event.target.closest(".role-delete");
+        if (deleteButton) {
+          const name = deleteButton.dataset.roleName;
+          if (!name) {
+            return;
+          }
+          if (!confirm(`Delete role '${name}'?`)) {
+            return;
+          }
+          try {
+            const response = await fetch(`/api/roles/${encodeURIComponent(name)}`, {
+              method: "DELETE",
+              headers: { Accept: "application/json" },
+            });
+            if (!response.ok && response.status !== 204) {
+              const payload = await response.json().catch(() => ({}));
+              throw new Error(payload.error || "Unable to delete role.");
+            }
+            removeRoleLocal(name);
+            renderRoleTable();
+            if (roleOriginalNameInput.value === name) {
+              resetRoleForm();
+            }
+          } catch (error) {
+            console.error(error);
+            alert(error.message || "Unable to delete role.");
+          }
+        }
+      });
+
+      roleForm?.addEventListener("submit", async (event) => {
+        event.preventDefault();
+        setRoleMessage("");
+        try {
+          const attributes = parseAttributesTextarea(roleAttributesInput.value);
+          const payload = {
+            original_name: roleOriginalNameInput.value || null,
+            name: roleNameInput.value.trim(),
+            description: roleDescriptionInput.value.trim() || null,
+            user_ou: roleUserOuInput.value.trim() || null,
+            default_manager_dn: roleManagerDnInput.value.trim() || null,
+            attributes,
+            groups: roleGroupPicker.get(),
+          };
+          if (!payload.name) {
+            throw new Error("Role name is required.");
+          }
+          const response = await fetch("/api/roles", {
+            method: "POST",
+            headers: {
+              Accept: "application/json",
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(data.error || "Unable to save role.");
+          }
+          const updatedRole = data.role;
+          upsertRoleLocal(updatedRole, payload.original_name);
+          renderRoleTable();
+          loadRoleIntoForm(updatedRole);
+          setRoleMessage("Role saved.", "success");
+        } catch (error) {
+          console.error(error);
+          setRoleMessage(error.message || "Unable to save role.", "error");
+        }
+      });
+
+      roleNewButton?.addEventListener("click", resetRoleForm);
+      roleResetButton?.addEventListener("click", resetRoleForm);
+
+      renderRoleTable();
+    });
+  </script>
 {% endblock %}
