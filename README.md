@@ -53,6 +53,9 @@ export ONBOARD_SYNC__COMMAND="powershell.exe -Command \"Start-ADSyncSyncCycle -P
 |  | `shell` | Execute the sync command through the shell (set to `true` for complex commands). |
 |  | `timeout` | Seconds to wait for the sync command to complete. |
 | `storage` | `job_roles_file` | Path to the YAML file containing job role definitions. |
+| `m365` | `tenant_id`, `client_id`, `client_secret` | Azure AD app registration used for Microsoft Graph calls (prefer environment overrides for secrets). |
+| `m365` | `sku_cache_file`, `cache_ttl_minutes` | Location + refresh interval for the cached license catalog retrieved from Graph. |
+| `m365` | `default_usage_location` | Two-letter country/region (e.g. `US`). If the new Azure AD object doesn’t have `usageLocation`, the worker sets this before assigning Microsoft 365 licenses. |
 
 ## Web portal
 Launch the portal with:
@@ -76,6 +79,12 @@ export ONBOARD_WEB_DEBUG=1          # enable Flask debug mode
 ```
 
 > The web UI respects the same `config/settings.yaml` file as the CLI, so you can manage everything from the browser once the configuration is in place.
+
+### Microsoft 365 licensing workflow
+- Configure the tenant ID, client ID, and **Default Usage Location** on the Configuration page (store the client secret in `ONBOARD_M365__CLIENT_SECRET` or another secrets manager).
+- Use the “Refresh License Catalog” button to pull the latest `/subscribedSkus`. The catalog is cached locally according to `m365.cache_ttl_minutes`.
+- The onboarding and cloning forms render a card-based picker for SKUs and service plans. Job roles can also store default license selections via the same UI.
+- When a submission includes licenses, the background worker waits for Azure AD to surface the new user, sets `usageLocation` if it’s still missing (using the configured default), and then calls `assignLicense` for each SKU. Failures are retried according to the backoff schedule and logged so you can investigate.
 
 ## Command-line usage
 All CLI commands are executed with `python -m onboard_offboard`.
