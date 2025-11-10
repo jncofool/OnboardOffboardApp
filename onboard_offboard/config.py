@@ -59,6 +59,7 @@ class M365Config:
     client_secret: Optional[str] = None
     sku_cache_file: Path = field(default_factory=lambda: Path("data/m365_skus.json"))
     cache_ttl_minutes: int = 720  # 12 hours by default
+    default_usage_location: Optional[str] = None
 
     @property
     def has_credentials(self) -> bool:
@@ -269,6 +270,7 @@ def load_config(path: Optional[Path] = None) -> AppConfig:
         client_secret=_optional_str(m365_section.get("client_secret")),
         sku_cache_file=cache_path,
         cache_ttl_minutes=cache_ttl,
+        default_usage_location=_optional_str(m365_section.get("default_usage_location")),
     )
 
     return AppConfig(ldap=ldap_config, sync=sync_config, storage=storage_config, m365=m365_config)
@@ -313,6 +315,7 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
             "client_secret": config.m365.client_secret or "",
             "sku_cache_file": str(config.m365.sku_cache_file),
             "cache_ttl_minutes": config.m365.cache_ttl_minutes,
+            "default_usage_location": config.m365.default_usage_location or "",
         },
     }
 

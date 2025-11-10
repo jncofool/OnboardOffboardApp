@@ -1,2 +1,5 @@
 __pycache__/
 *.pyc
+data/m365_skus.json
+data/license_jobs.json
+

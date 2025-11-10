@@ -204,6 +204,12 @@ class M365Client:
         }
         return self._request("POST", f"/users/{user_id}/assignLicense", json=payload)
 
+    def update_user(self, user_id: str, **fields: Any) -> Dict[str, Any]:
+        payload = {key: value for key, value in fields.items() if value is not None}
+        if not payload:
+            return {}
+        return self._request("PATCH", f"/users/{user_id}", json=payload)
+
     # ------------------------------------------------------------------ #
     # Cache read/write helpers                                           #
     # ------------------------------------------------------------------ #

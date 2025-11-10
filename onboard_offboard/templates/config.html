@@ -141,6 +141,20 @@
             value="{{ config.m365.cache_ttl_minutes }}"
           />
         </div>
+        <div class="field">
+          <label for="m365_default_usage_location">Default Usage Location</label>
+          <input
+            id="m365_default_usage_location"
+            name="m365_default_usage_location"
+            type="text"
+            maxlength="2"
+            value="{{ config.m365.default_usage_location or '' }}"
+            placeholder="US"
+            autocomplete="off"
+            style="text-transform: uppercase;"
+          />
+          <div class="hint">Two-letter country/region code applied before assigning licenses (e.g., US, CA).</div>
+        </div>
       </div>
       <div class="status-card" id="m365_status_card">
         <span class="badge{% if m365_status.configured and not m365_status.error and not m365_status.stale %} ok{% elif m365_status.stale or m365_status.error %} stale{% endif %}" id="m365_status_badge">
@@ -175,6 +189,7 @@
         <tr>
           <th style="width: 20%;">Name</th>
           <th style="width: 25%;">Default Manager</th>
+          <th style="width: 20%;">Licenses</th>
           <th style="width: 15%;">Groups</th>
           <th>Notes</th>
           <th style="width: 15%;">Actions</th>
@@ -253,6 +268,15 @@
         </div>
         <div class="hint">Search to add groups. Click the × on a tag to remove it.</div>
       </div>
+      {% if m365_status.configured %}
+      <div class="field">
+        <label>Default Microsoft 365 Licenses</label>
+        <div id="role_license_catalog" class="license-catalog"></div>
+        <small id="role_license_status" class="hint"></small>
+        <div class="hint">Select the licenses and app toggles this role should receive automatically.</div>
+        <div id="role_license_hidden_inputs"></div>
+      </div>
+      {% endif %}
       <div class="field" id="role_form_message" hidden></div>
       <div class="field">
         <button type="submit">Save Role</button>
@@ -737,6 +761,387 @@
         roleManagerClear
       );
       const roleGroupPicker = createGroupPicker(roleGroupTags, roleGroupSearchInput, roleGroupResults);
+      const createLicenseManager = ({
+        catalogEl,
+        hiddenContainer,
+        statusEl,
+        initialSelections = [],
+        onManualChange,
+      }) => {
+        const skuMap = new Map();
+        const cardViews = new Map();
+        const selected = new Map();
+        const selectionCache = new Map();
+        let pendingSelections = Array.isArray(initialSelections) ? initialSelections.slice() : [];
+        let catalogLoaded = false;
+
+        const formatSkuName = (sku) =>
+          sku?.productName || sku?.skuPartNumber || sku?.skuId || "License";
+
+        const getAvailability = (sku) => {
+          const enabled = Number(sku?.prepaidUnits?.enabled ?? 0);
+          const consumed = Number(sku?.consumedUnits ?? 0);
+          const available = Math.max(0, enabled - consumed);
+          return { enabled, consumed, available };
+        };
+
+        const getDefaultDisabledPlans = (sku) => {
+          const defaults = [];
+          (sku?.servicePlans || []).forEach((plan) => {
+            const planId = String(plan?.servicePlanId || "");
+            if (!planId) {
+              return;
+            }
+            const scope = String(plan?.appliesTo || "User").toLowerCase();
+            const status = String(plan?.provisioningStatus || "").toLowerCase();
+            if (scope !== "user" || status === "disabled") {
+              defaults.push(planId);
+            }
+          });
+          return defaults;
+        };
+
+        const setStatus = (message) => {
+          if (statusEl) {
+            statusEl.textContent = message || "";
+          }
+        };
+
+        const updateStatus = () => {
+          if (!statusEl) {
+            return;
+          }
+          if (!selected.size) {
+            statusEl.textContent = "No licenses selected.";
+            return;
+          }
+          const labels = [];
+          selected.forEach((_, skuId) => {
+            const sku = skuMap.get(skuId);
+            labels.push(formatSkuName(sku) || skuId);
+          });
+          statusEl.textContent = `${selected.size} license${selected.size === 1 ? "" : "s"} selected: ${labels.join(", ")}`;
+        };
+
+        const syncHidden = () => {
+          if (!hiddenContainer) {
+            return;
+          }
+          hiddenContainer.innerHTML = "";
+          selected.forEach((entry, skuId) => {
+            const input = document.createElement("input");
+            input.type = "hidden";
+            input.name = "license_selection";
+            input.value = JSON.stringify({
+              sku_id: skuId,
+              disabled_plans: Array.from(entry.disabled),
+            });
+            hiddenContainer.appendChild(input);
+          });
+        };
+
+        const renderPlansFor = (view, selection) => {
+          const group = view.planGroup;
+          group.innerHTML = "";
+          if (!selection) {
+            group.classList.add("is-empty");
+            return;
+          }
+          const sku = view.sku;
+          const plans = (sku?.servicePlans || [])
+            .filter((plan) => plan?.servicePlanId)
+            .sort((a, b) =>
+              (a.servicePlanName || "").localeCompare(b.servicePlanName || "")
+            );
+          if (!plans.length) {
+            group.classList.add("is-empty");
+            return;
+          }
+          group.classList.remove("is-empty");
+          plans.forEach((plan) => {
+            const planId = String(plan.servicePlanId);
+            const scope = String(plan.appliesTo || "User").toLowerCase();
+            const isAssignable = scope === "user";
+
+            const item = document.createElement("label");
+            item.className = "license-plan-item";
+
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.checked = !selection.disabled.has(planId);
+            checkbox.disabled = !isAssignable;
+            checkbox.addEventListener("change", (event) => {
+              event.stopPropagation();
+              if (checkbox.checked) {
+                selection.disabled.delete(planId);
+              } else {
+                selection.disabled.add(planId);
+              }
+              syncHidden();
+              updateStatus();
+              if (typeof onManualChange === "function") {
+                onManualChange();
+              }
+            });
+
+            const info = document.createElement("div");
+            const title = document.createElement("strong");
+            title.textContent = plan.servicePlanName || planId;
+            info.appendChild(title);
+
+            const details = [];
+            if (plan.provisioningStatus) {
+              details.push(`Status: ${plan.provisioningStatus}`);
+            }
+            if (!isAssignable) {
+              details.push(`Scope: ${plan.appliesTo || "Tenant"}`);
+            }
+            if (details.length) {
+              const meta = document.createElement("small");
+              meta.textContent = details.join(" | " );
+              info.appendChild(meta);
+            }
+
+          item.appendChild(checkbox);
+          item.appendChild(info);
+          item.addEventListener("click", (event) => {
+            event.stopPropagation();
+          });
+          group.appendChild(item);
+        });
+        };
+
+        const applySelectionToView = (skuId) => {
+          if (!catalogLoaded) {
+            return;
+          }
+          const view = cardViews.get(skuId);
+          if (!view) {
+            return;
+          }
+          const selection = selected.get(skuId);
+          view.checkbox.checked = Boolean(selection);
+          view.card.classList.toggle("active", Boolean(selection));
+          if (selection) {
+            renderPlansFor(view, selection);
+          } else {
+            view.planGroup.innerHTML = "";
+            view.planGroup.classList.add("is-empty");
+          }
+        };
+
+        const syncSelectionsToViews = ({ skipManual = false } = {}) => {
+          if (catalogLoaded) {
+            cardViews.forEach((_, skuId) => applySelectionToView(skuId));
+          }
+          syncHidden();
+          updateStatus();
+          if (!skipManual && typeof onManualChange === "function") {
+            onManualChange();
+          }
+        };
+
+        const applyPendingSelections = ({ skipManual = false } = {}) => {
+          if (!catalogLoaded) {
+            return;
+          }
+          selected.clear();
+          pendingSelections.forEach((entry) => {
+            const skuId = String(entry?.sku_id || entry?.skuId || "").trim();
+            if (!skuId || !skuMap.has(skuId)) {
+              return;
+            }
+            const disabled = Array.isArray(entry?.disabled_plans || entry?.disabled_service_plans)
+              ? entry.disabled_plans
+              : [];
+            selected.set(skuId, { disabled: new Set(disabled) });
+          });
+          pendingSelections = [];
+          syncSelectionsToViews({ skipManual });
+        };
+
+        const setSelections = (entries, options = {}) => {
+          const normalized = Array.isArray(entries)
+            ? entries.map((entry) => ({
+                sku_id: String(entry?.sku_id || entry?.skuId || "").trim(),
+                disabled_plans: Array.isArray(entry?.disabled_plans || entry?.disabled_service_plans)
+                  ? entry.disabled_plans
+                  : [],
+              }))
+            : [];
+          pendingSelections = normalized;
+          if (catalogLoaded) {
+            applyPendingSelections({ skipManual: options.skipManual });
+          }
+        };
+
+        const getSelections = () =>
+          Array.from(selected.entries()).map(([skuId, entry]) => ({
+            sku_id: skuId,
+            disabled_plans: Array.from(entry.disabled),
+          }));
+
+        const clearSelections = (options = {}) => {
+          pendingSelections = [];
+          selected.clear();
+          selectionCache.clear();
+          syncSelectionsToViews({ skipManual: options.skipManual });
+        };
+
+        const handleCheckboxToggle = (view) => {
+          const skuId = view.sku.skuId;
+          if (selected.has(skuId)) {
+            const existing = selected.get(skuId);
+            selectionCache.set(skuId, new Set(existing.disabled));
+            selected.delete(skuId);
+          } else {
+            const sku = view.sku;
+            const cached = selectionCache.get(skuId);
+            const defaults = cached ? Array.from(cached) : getDefaultDisabledPlans(sku);
+            selected.set(skuId, { disabled: new Set(defaults) });
+            selectionCache.delete(skuId);
+          }
+          applySelectionToView(skuId);
+          syncHidden();
+          updateStatus();
+          if (typeof onManualChange === "function") {
+            onManualChange();
+          }
+        };
+
+        const renderCatalog = () => {
+          if (!catalogEl) {
+            return;
+          }
+          catalogEl.innerHTML = "";
+          cardViews.clear();
+          const items = Array.from(skuMap.values()).sort((a, b) =>
+            formatSkuName(a).localeCompare(formatSkuName(b))
+          );
+          items.forEach((sku) => {
+            const skuId = String(sku.skuId);
+            const availability = getAvailability(sku);
+
+            const card = document.createElement("div");
+            card.className = "license-card";
+            if (availability.available <= 0) {
+              card.classList.add("exhausted");
+            }
+
+            const header = document.createElement("div");
+            header.className = "license-card-header";
+
+            const checkbox = document.createElement("input");
+            checkbox.type = "checkbox";
+            checkbox.className = "license-card-checkbox";
+            checkbox.id = `license-${skuId}`;
+
+            const body = document.createElement("div");
+            body.className = "license-card-body";
+
+            const title = document.createElement("h4");
+            title.textContent = formatSkuName(sku);
+            body.appendChild(title);
+
+            const part = document.createElement("div");
+            part.className = "license-detail";
+            part.textContent = sku.skuPartNumber || skuId;
+            body.appendChild(part);
+
+            if (sku.capabilityStatus) {
+              const status = document.createElement("div");
+              status.className = "license-detail";
+              status.textContent = `Status: ${sku.capabilityStatus}`;
+              body.appendChild(status);
+            }
+
+            const availabilityEl = document.createElement("div");
+            availabilityEl.className = "license-availability";
+            availabilityEl.textContent = `${availability.available} available (${availability.enabled} purchased)`;
+            body.appendChild(availabilityEl);
+
+            header.appendChild(checkbox);
+            header.appendChild(body);
+
+            const planGroup = document.createElement("div");
+            planGroup.className = "license-plan-group is-empty";
+
+            card.appendChild(header);
+            card.appendChild(planGroup);
+            catalogEl.appendChild(card);
+
+            const view = { card, checkbox, planGroup, sku };
+            cardViews.set(skuId, view);
+
+            checkbox.addEventListener("change", () => handleCheckboxToggle(view));
+            card.addEventListener("click", (event) => {
+              if (event.target === checkbox) {
+                return;
+              }
+              checkbox.checked = !checkbox.checked;
+              handleCheckboxToggle(view);
+            });
+          });
+        };
+
+        const loadSkus = async () => {
+          try {
+            const response = await fetch("/api/m365/skus", {
+              headers: { Accept: "application/json" },
+            });
+            const payload = await response.json();
+            if (!response.ok) {
+              throw new Error(payload.error || payload.message || "Unable to load license catalog.");
+            }
+            skuMap.clear();
+            (payload.items || []).forEach((sku) => {
+              if (sku?.skuId) {
+                skuMap.set(String(sku.skuId), sku);
+              }
+            });
+            catalogLoaded = true;
+            renderCatalog();
+            applyPendingSelections({ skipManual: true });
+            if (!selected.size) {
+              setStatus("Select licenses to assign.");
+            }
+            return payload;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            setStatus(message);
+            throw error;
+          }
+        };
+
+        setSelections(pendingSelections, { skipManual: true });
+
+        return {
+          loadSkus,
+          setSelections,
+          clear: (options = {}) => clearSelections(options),
+          getSelections,
+          getLabel: (skuId) => {
+            const sku = skuMap.get(skuId);
+            return sku ? formatSkuName(sku) : skuId;
+          },
+        };
+      };
+
+      const roleLicenseCatalog = document.getElementById("role_license_catalog");
+      const roleLicenseHiddenInputs = document.getElementById("role_license_hidden_inputs");
+      const roleLicenseStatus = document.getElementById("role_license_status");
+      let roleLicenseManager = null;
+      if (roleLicenseCatalog) {
+        roleLicenseManager = createLicenseManager({
+          catalogEl: roleLicenseCatalog,
+          hiddenContainer: roleLicenseHiddenInputs,
+          statusEl: roleLicenseStatus,
+        });
+        if (roleLicenseStatus) {
+          roleLicenseStatus.textContent = "Loading license catalog...";
+        }
+        roleLicenseManager.loadSkus().catch(() => {});
+      }
 
       const resetRoleForm = () => {
         roleFormHeading.textContent = "Add Role";
@@ -747,6 +1152,9 @@
         setManagerField("", "");
         roleAttributesInput.value = "";
         roleGroupPicker.set([]);
+        if (roleLicenseManager) {
+          roleLicenseManager.setSelections([], { skipManual: true });
+        }
         setRoleMessage("");
       };
 
@@ -784,7 +1192,7 @@
           return;
         }
         if (state.roles.length === 0) {
-          roleTableBody.innerHTML = "<tr><td colspan='5'>No roles have been configured yet.</td></tr>";
+          roleTableBody.innerHTML = "<tr><td colspan='6'>No roles have been configured yet.</td></tr>";
           return;
         }
         roleTableBody.innerHTML = "";
@@ -799,6 +1207,24 @@
           const managerCell = document.createElement("td");
           managerCell.textContent = role.default_manager_dn || "";
           row.appendChild(managerCell);
+
+          const licenseCell = document.createElement("td");
+          const licenseEntries = Array.isArray(role.licenses) ? role.licenses : [];
+          if (licenseEntries.length) {
+            const labels = licenseEntries
+              .map((entry) => {
+                const skuId = entry?.sku_id || entry?.skuId || entry?.id || "";
+                if (!skuId) {
+                  return "";
+                }
+                return roleLicenseManager ? roleLicenseManager.getLabel(skuId) : skuId;
+              })
+              .filter(Boolean);
+            licenseCell.textContent = labels.length ? labels.join(", ") : "—";
+          } else {
+            licenseCell.textContent = "—";
+          }
+          row.appendChild(licenseCell);
 
           const groupsCell = document.createElement("td");
           groupsCell.textContent = String(role.groups?.length || 0);
@@ -838,6 +1264,9 @@
         setManagerField(role.default_manager_dn, role.default_manager_dn);
         roleAttributesInput.value = formatAttributesTextarea(role.attributes);
         roleGroupPicker.set(role.groups || []);
+        if (roleLicenseManager) {
+          roleLicenseManager.setSelections(role.licenses || [], { skipManual: true });
+        }
         setRoleMessage("");
         roleNameInput.focus();
       };
@@ -896,6 +1325,15 @@
             attributes,
             groups: roleGroupPicker.get(),
           };
+          const licenseSelections = roleLicenseManager ? roleLicenseManager.getSelections() : [];
+          payload.licenses = licenseSelections;
+          if (licenseSelections.length) {
+            payload.license_sku_id = licenseSelections[0].sku_id;
+            payload.disabled_service_plans = licenseSelections[0].disabled_plans;
+          } else {
+            payload.license_sku_id = null;
+            payload.disabled_service_plans = [];
+          }
           if (!payload.name) {
             throw new Error("Role name is required.");
           }
@@ -929,3 +1367,4 @@
     });
   </script>
 {% endblock %}
+

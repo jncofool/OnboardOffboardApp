@@ -33,6 +33,7 @@ class LicenseJob:
     id: str
     principal: str
     sku_id: str
+    principal_candidates: List[str] = field(default_factory=list)
     disabled_plans: List[str] = field(default_factory=list)
     status: str = "pending"  # pending, completed, failed
     attempts: int = 0
@@ -47,6 +48,7 @@ class LicenseJob:
             "id": self.id,
             "principal": self.principal,
             "sku_id": self.sku_id,
+            "principal_candidates": list(self.principal_candidates),
             "disabled_plans": list(self.disabled_plans),
             "status": self.status,
             "attempts": self.attempts,
@@ -63,6 +65,7 @@ class LicenseJob:
             id=str(data.get("id") or uuid.uuid4()),
             principal=str(data["principal"]),
             sku_id=str(data["sku_id"]),
+            principal_candidates=list(data.get("principal_candidates") or []),
             disabled_plans=list(data.get("disabled_plans") or []),
             status=str(data.get("status") or "pending"),
             attempts=int(data.get("attempts") or 0),
@@ -122,13 +125,26 @@ class LicenseJobStore:
         principal: str,
         sku_id: str,
         disabled_plans: Iterable[str],
+        alternates: Iterable[str] = (),
         delay_seconds: int = 0,
     ) -> LicenseJob:
         with self._lock:
+            candidate_set: List[str] = []
+            seen_lower: set[str] = {principal.strip().lower()}
+            for candidate in alternates or []:
+                cleaned = str(candidate or "").strip()
+                if not cleaned:
+                    continue
+                lowered = cleaned.lower()
+                if lowered in seen_lower:
+                    continue
+                seen_lower.add(lowered)
+                candidate_set.append(cleaned)
             job = LicenseJob(
                 id=str(uuid.uuid4()),
                 principal=principal,
                 sku_id=sku_id,
+                principal_candidates=candidate_set,
                 disabled_plans=list(disabled_plans or []),
             )
             if delay_seconds > 0:

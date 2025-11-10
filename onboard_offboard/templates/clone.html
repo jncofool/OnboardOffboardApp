@@ -131,35 +131,32 @@
         <div id="group_hidden_inputs"></div>
       </div>
       {% if m365_status.configured %}
-        <div class="field" id="license_field">
-          <label for="license_sku">Microsoft 365 License</label>
-          <select id="license_sku" name="license_sku">
-            <option value="">Do not assign a license</option>
-          </select>
-          <div class="field-actions">
-            {% if template_license_selection %}
-              <button type="button" class="inline-button" id="apply_template_license">Use template license</button>
-            {% endif %}
-            <button type="button" class="inline-button" id="apply_role_license">Use role default</button>
-            <button type="button" class="inline-button" id="clear_license">Clear license</button>
-          </div>
-          <small id="license_status_message" class="hint"></small>
-          {% if template_license_selection and template_license_selection.assigned_count|int > 1 %}
-            <small class="hint">
-              Template user has multiple licenses; the first assignment is preselected.
-            </small>
+      <div class="field" id="license_field">
+        <label>Microsoft 365 Licenses</label>
+        <div id="license_catalog" class="license-catalog"></div>
+        <div class="hint">
+          Choose one or more licenses to assign to the cloned user. Toggle individual apps under each license to fine-tune access.
+        </div>
+        <div class="field-actions">
+          {% if template_license_selection %}
+            <button type="button" class="inline-button" id="apply_template_license">Use template license</button>
           {% endif %}
+          <button type="button" class="inline-button" id="apply_role_license">Use role defaults</button>
+          <button type="button" class="inline-button" id="clear_license">Clear all</button>
         </div>
-        <div class="field" id="service_plan_field" hidden>
-          <label>Apps</label>
-          <div id="license_plan_list" class="checkbox-grid"></div>
-          <div id="license_hidden_inputs"></div>
-        </div>
-      {% else %}
-        <div class="status-card">
-          <span class="badge">Not Configured</span>
-          <p>
-            Microsoft 365 credentials have not been configured. Add them on the Configuration page to manage licenses during cloning.
+        <small id="license_status_message" class="hint"></small>
+        <div id="license_hidden_inputs"></div>
+        {% if template_license_selection and template_license_selection.assigned_count|int > 1 %}
+          <small class="hint">
+            Template user has multiple licenses; use "Use template license" to mirror their current assignments.
+          </small>
+        {% endif %}
+      </div>
+    {% else %}
+      <div class="status-card">
+        <span class="badge">Not Configured</span>
+        <p>
+          Microsoft 365 credentials have not been configured. Add them on the Configuration page to manage licenses during cloning.
           </p>
         </div>
       {% endif %}
@@ -422,246 +419,419 @@
           });
         };
 
+    const createLicenseManager = ({
+      catalogEl,
+      hiddenContainer,
+      statusEl,
+      initialSelections = [],
+      onManualChange,
+    }) => {
+      const skuMap = new Map();
+      const cardViews = new Map();
+      const selected = new Map();
+      const selectionCache = new Map();
+      let pendingSelections = Array.isArray(initialSelections) ? initialSelections.slice() : [];
+      let catalogLoaded = false;
+
+      const formatSkuName = (sku) =>
+        sku?.productName || sku?.skuPartNumber || sku?.skuId || "License";
+
+      const getAvailability = (sku) => {
+        const enabled = Number(sku?.prepaidUnits?.enabled ?? 0);
+        const consumed = Number(sku?.consumedUnits ?? 0);
+        const available = Math.max(0, enabled - consumed);
+        return { enabled, consumed, available };
+      };
+
+      const getDefaultDisabledPlans = (sku) => {
+        const defaults = [];
+        (sku?.servicePlans || []).forEach((plan) => {
+          const planId = String(plan?.servicePlanId || "");
+          if (!planId) {
+            return;
+          }
+          const scope = String(plan?.appliesTo || "User").toLowerCase();
+          const status = String(plan?.provisioningStatus || "").toLowerCase();
+          if (scope !== "user" || status === "disabled") {
+            defaults.push(planId);
+          }
+        });
+        return defaults;
+      };
+
+      const setStatus = (message) => {
+        if (statusEl) {
+          statusEl.textContent = message || "";
+        }
+      };
+
+      const updateStatus = () => {
+        if (!statusEl) {
+          return;
+        }
+        if (!selected.size) {
+          statusEl.textContent = "No licenses selected.";
+          return;
+        }
+        const labels = [];
+        selected.forEach((_, skuId) => {
+          const sku = skuMap.get(skuId);
+          labels.push(formatSkuName(sku) || skuId);
+        });
+        statusEl.textContent = `${selected.size} license${selected.size === 1 ? "" : "s"} selected: ${labels.join(", ")}`;
+      };
+
+      const syncHidden = () => {
+        if (!hiddenContainer) {
+          return;
+        }
+        hiddenContainer.innerHTML = "";
+        selected.forEach((entry, skuId) => {
+          const input = document.createElement("input");
+          input.type = "hidden";
+          input.name = "license_selection";
+          input.value = JSON.stringify({
+            sku_id: skuId,
+            disabled_plans: Array.from(entry.disabled),
+          });
+          hiddenContainer.appendChild(input);
+        });
+      };
+
+      const renderPlansFor = (view, selection) => {
+        const group = view.planGroup;
+        group.innerHTML = "";
+        if (!selection) {
+          group.classList.add("is-empty");
+          return;
+        }
+        const sku = view.sku;
+        const plans = (sku?.servicePlans || [])
+          .filter((plan) => plan?.servicePlanId)
+          .sort((a, b) =>
+            (a.servicePlanName || "").localeCompare(b.servicePlanName || "")
+          );
+        if (!plans.length) {
+          group.classList.add("is-empty");
+          return;
+        }
+        group.classList.remove("is-empty");
+        plans.forEach((plan) => {
+          const planId = String(plan.servicePlanId);
+          const scope = String(plan.appliesTo || "User").toLowerCase();
+          const isAssignable = scope === "user";
+
+          const item = document.createElement("label");
+          item.className = "license-plan-item";
+
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.checked = !selection.disabled.has(planId);
+          checkbox.disabled = !isAssignable;
+          checkbox.addEventListener("change", (event) => {
+            event.stopPropagation();
+            if (checkbox.checked) {
+              selection.disabled.delete(planId);
+            } else {
+              selection.disabled.add(planId);
+            }
+            syncHidden();
+            updateStatus();
+            if (typeof onManualChange === "function") {
+              onManualChange();
+            }
+          });
+
+          const info = document.createElement("div");
+          const title = document.createElement("strong");
+          title.textContent = plan.servicePlanName || planId;
+          info.appendChild(title);
+
+          const details = [];
+          if (plan.provisioningStatus) {
+            details.push(`Status: ${plan.provisioningStatus}`);
+          }
+          if (!isAssignable) {
+            details.push(`Scope: ${plan.appliesTo || "Tenant"}`);
+          }
+          if (details.length) {
+            const meta = document.createElement("small");
+            meta.textContent = details.join(" | ");
+            info.appendChild(meta);
+          }
+
+          item.appendChild(checkbox);
+          item.appendChild(info);
+          item.addEventListener("click", (event) => {
+            event.stopPropagation();
+          });
+          group.appendChild(item);
+        });
+      };
+
+      const applySelectionToView = (skuId) => {
+        if (!catalogLoaded) {
+          return;
+        }
+        const view = cardViews.get(skuId);
+        if (!view) {
+          return;
+        }
+        const selection = selected.get(skuId);
+        view.checkbox.checked = Boolean(selection);
+        view.card.classList.toggle("active", Boolean(selection));
+        if (selection) {
+          renderPlansFor(view, selection);
+        } else {
+          view.planGroup.innerHTML = "";
+          view.planGroup.classList.add("is-empty");
+        }
+      };
+
+      const syncSelectionsToViews = ({ skipManual = false } = {}) => {
+        if (catalogLoaded) {
+          cardViews.forEach((_, skuId) => applySelectionToView(skuId));
+        }
+        syncHidden();
+        updateStatus();
+        if (!skipManual && typeof onManualChange === "function") {
+          onManualChange();
+        }
+      };
+
+      const applyPendingSelections = ({ skipManual = false } = {}) => {
+        if (!catalogLoaded) {
+          return;
+        }
+        selected.clear();
+        pendingSelections.forEach((entry) => {
+          const skuId = String(entry?.sku_id || entry?.skuId || "").trim();
+          if (!skuId || !skuMap.has(skuId)) {
+            return;
+          }
+          const disabled = Array.isArray(entry?.disabled_plans || entry?.disabled_service_plans)
+            ? entry.disabled_plans
+            : [];
+          selected.set(skuId, { disabled: new Set(disabled) });
+        });
+        pendingSelections = [];
+        syncSelectionsToViews({ skipManual });
+      };
+
+      const setSelections = (entries, options = {}) => {
+        const normalized = Array.isArray(entries)
+          ? entries.map((entry) => ({
+              sku_id: String(entry?.sku_id || entry?.skuId || "").trim(),
+              disabled_plans: Array.isArray(entry?.disabled_plans || entry?.disabled_service_plans)
+                ? entry.disabled_plans
+                : [],
+            }))
+          : [];
+        pendingSelections = normalized;
+        if (catalogLoaded) {
+          applyPendingSelections({ skipManual: options.skipManual });
+        }
+      };
+
+      const getSelections = () =>
+        Array.from(selected.entries()).map(([skuId, entry]) => ({
+          sku_id: skuId,
+          disabled_plans: Array.from(entry.disabled),
+        }));
+
+      const clearSelections = (options = {}) => {
+        pendingSelections = [];
+        selected.clear();
+        selectionCache.clear();
+        syncSelectionsToViews({ skipManual: options.skipManual });
+      };
+
+      const handleCheckboxToggle = (view) => {
+        const skuId = view.sku.skuId;
+        if (selected.has(skuId)) {
+          const existing = selected.get(skuId);
+          selectionCache.set(skuId, new Set(existing.disabled));
+          selected.delete(skuId);
+        } else {
+          const sku = view.sku;
+          const cached = selectionCache.get(skuId);
+          const defaults = cached ? Array.from(cached) : getDefaultDisabledPlans(sku);
+          selected.set(skuId, { disabled: new Set(defaults) });
+          selectionCache.delete(skuId);
+        }
+        applySelectionToView(skuId);
+        syncHidden();
+        updateStatus();
+        if (typeof onManualChange === "function") {
+          onManualChange();
+        }
+      };
+
+      const renderCatalog = () => {
+        if (!catalogEl) {
+          return;
+        }
+        catalogEl.innerHTML = "";
+        cardViews.clear();
+        const items = Array.from(skuMap.values()).sort((a, b) =>
+          formatSkuName(a).localeCompare(formatSkuName(b))
+        );
+        items.forEach((sku) => {
+          const skuId = String(sku.skuId);
+          const availability = getAvailability(sku);
+
+          const card = document.createElement("div");
+          card.className = "license-card";
+          if (availability.available <= 0) {
+            card.classList.add("exhausted");
+          }
+
+          const header = document.createElement("div");
+          header.className = "license-card-header";
+
+          const checkbox = document.createElement("input");
+          checkbox.type = "checkbox";
+          checkbox.className = "license-card-checkbox";
+          checkbox.id = `license-${skuId}`;
+
+          const body = document.createElement("div");
+          body.className = "license-card-body";
+
+          const title = document.createElement("h4");
+          title.textContent = formatSkuName(sku);
+          body.appendChild(title);
+
+          const part = document.createElement("div");
+          part.className = "license-detail";
+          part.textContent = sku.skuPartNumber || skuId;
+          body.appendChild(part);
+
+          if (sku.capabilityStatus) {
+            const status = document.createElement("div");
+            status.className = "license-detail";
+            status.textContent = `Status: ${sku.capabilityStatus}`;
+            body.appendChild(status);
+          }
+
+          const availabilityEl = document.createElement("div");
+          availabilityEl.className = "license-availability";
+          availabilityEl.textContent = `${availability.available} available (${availability.enabled} purchased)`;
+          body.appendChild(availabilityEl);
+
+          header.appendChild(checkbox);
+          header.appendChild(body);
+
+          const planGroup = document.createElement("div");
+          planGroup.className = "license-plan-group is-empty";
+
+          card.appendChild(header);
+          card.appendChild(planGroup);
+          catalogEl.appendChild(card);
+
+          const view = { card, checkbox, planGroup, sku };
+          cardViews.set(skuId, view);
+
+          checkbox.addEventListener("change", () => handleCheckboxToggle(view));
+          card.addEventListener("click", (event) => {
+            if (event.target === checkbox) {
+              return;
+            }
+            checkbox.checked = !checkbox.checked;
+            handleCheckboxToggle(view);
+          });
+        });
+      };
+
+      const loadSkus = async () => {
+        try {
+          const response = await fetch("/api/m365/skus", {
+            headers: { Accept: "application/json" },
+          });
+          const payload = await response.json();
+          if (!response.ok) {
+            throw new Error(payload.error || payload.message || "Unable to load license catalog.");
+          }
+          skuMap.clear();
+          (payload.items || []).forEach((sku) => {
+            if (sku?.skuId) {
+              skuMap.set(String(sku.skuId), sku);
+            }
+          });
+          catalogLoaded = true;
+          renderCatalog();
+          applyPendingSelections({ skipManual: true });
+          if (!selected.size) {
+            setStatus("Select licenses to assign.");
+          }
+          return payload;
+        } catch (error) {
+          setStatus(error instanceof Error ? error.message : String(error));
+          throw error;
+        }
+      };
+
+      setSelections(pendingSelections, { skipManual: true });
+
+      return {
+        loadSkus,
+        setSelections,
+        clear: (options = {}) => clearSelections(options),
+        getSelections,
+        getLabel: (skuId) => {
+          const sku = skuMap.get(skuId);
+          return sku ? formatSkuName(sku) : skuId;
+        },
+      };
+    };
+
         const jobRoleInput = document.getElementById("job_role");
         const roleGroups = {{ role_groups|tojson }};
         const initialGroups = {{ selected_groups|tojson }};
-        const roleLicenseDefaults = {{ role_license_defaults|tojson }};
-        const initialLicenseSku = {{ selected_license|tojson }};
-        const initialDisabledPlans = {{ selected_disabled_plans|tojson }};
-        const templateLicense = {{ template_license_selection|tojson }};
-        const m365Status = {{ m365_status|tojson }};
-        const licenseSelect = document.getElementById("license_sku");
-        const licensePlanList = document.getElementById("license_plan_list");
+        const licenseCatalog = document.getElementById("license_catalog");
         const licenseHiddenInputs = document.getElementById("license_hidden_inputs");
         const licenseStatusMessage = document.getElementById("license_status_message");
-        const licensePlanField = document.getElementById("service_plan_field");
         const applyTemplateLicenseButton = document.getElementById("apply_template_license");
         const applyRoleLicenseButton = document.getElementById("apply_role_license");
         const clearLicenseButton = document.getElementById("clear_license");
-        let licensePicker = null;
-        let licenseManuallyEdited = Boolean(initialLicenseSku);
+        const applyRoleGroupsButton = document.getElementById("apply_role_groups");
         const groupTags = document.getElementById("group_tags");
         const groupSearchInput = document.getElementById("group_search");
         const groupResults = document.getElementById("group_results");
         const groupHiddenInputs = document.getElementById("group_hidden_inputs");
-        const applyRoleGroupsButton = document.getElementById("apply_role_groups");
+        const templateLicense = {{ template_license_selection|tojson }};
+        const initialLicenseSelections = {{ selected_license_selections|default([], true)|tojson }};
+        const roleLicenseDefaults = {{ role_license_defaults|tojson }};
+        let licenseManuallyEdited = initialLicenseSelections.length > 0;
+        let licenseManager = null;
 
-        function createLicensePicker({
-          selectEl,
-          planContainer,
-          hiddenContainer,
-          statusEl,
-          planField,
-          onManualChange,
-        }) {
-          const skuMap = new Map();
-          let currentSku = "";
-          let disabledPlans = new Set();
+        const templateSelectionArray = Array.isArray(templateLicense?.licenses) && templateLicense.licenses.length
+          ? templateLicense.licenses
+              .map((entry) => ({
+                sku_id: String(entry?.sku_id || entry?.skuId || entry?.id || "").trim(),
+                disabled_plans: Array.isArray(entry?.disabled_plans || entry?.disabled_service_plans)
+                  ? entry.disabled_plans
+                  : [],
+              }))
+              .filter((item) => item.sku_id)
+          : templateLicense?.license_sku_id
+          ? [
+              {
+                sku_id: templateLicense.license_sku_id,
+                disabled_plans: templateLicense.disabled_service_plans || [],
+              },
+            ]
+          : [];
 
-          const setStatus = (message) => {
-            if (statusEl) {
-              statusEl.textContent = message || "";
-            }
-          };
-
-          const syncHidden = () => {
-            if (!hiddenContainer) {
-              return;
-            }
-            hiddenContainer.innerHTML = "";
-            disabledPlans.forEach((planId) => {
-              if (!planId) {
-                return;
-              }
-              const input = document.createElement("input");
-              input.type = "hidden";
-              input.name = "license_disabled_plan";
-              input.value = planId;
-              hiddenContainer.appendChild(input);
-            });
-          };
-
-          const formatAvailability = (sku) => {
-            if (!sku) {
-              return "";
-            }
-            const enabled = Number(sku?.prepaidUnits?.enabled ?? 0);
-            const consumed = Number(sku?.consumedUnits ?? 0);
-            const available = Math.max(0, enabled - consumed);
-            const name = sku?.skuPartNumber || sku?.skuId || "License";
-            return `${name} – ${available} available (${enabled} purchased)`;
-          };
-
-          const renderPlans = () => {
-            if (!planContainer) {
-              return;
-            }
-            const field = planField || planContainer.closest(".field");
-            planContainer.innerHTML = "";
-            if (!currentSku || !skuMap.has(currentSku)) {
-              if (field) {
-                field.hidden = true;
-              }
-              syncHidden();
-              if (skuMap.size) {
-                setStatus("Select a license to customise apps.");
-              }
-              return;
-            }
-            const sku = skuMap.get(currentSku);
-            const plans = (sku?.servicePlans || []).filter((plan) => plan?.servicePlanId);
-            plans.sort((a, b) =>
-              (a.servicePlanName || "").localeCompare(b.servicePlanName || "")
-            );
-            if (field) {
-              field.hidden = plans.length === 0;
-            }
-            plans.forEach((plan) => {
-              const planId = String(plan.servicePlanId);
-              const wrapper = document.createElement("label");
-              wrapper.className = "checkbox-card";
-              const checkbox = document.createElement("input");
-              checkbox.type = "checkbox";
-              checkbox.value = planId;
-              checkbox.checked = !disabledPlans.has(planId);
-              checkbox.addEventListener("change", (event) => {
-                if (event.target.checked) {
-                  disabledPlans.delete(planId);
-                } else {
-                  disabledPlans.add(planId);
-                }
-                syncHidden();
-              });
-              const label = document.createElement("span");
-              label.className = "checkbox-card-label";
-              label.textContent = plan.servicePlanName || plan.servicePlanId;
-              const status = document.createElement("span");
-              status.className = "checkbox-card-status";
-              status.textContent =
-                plan.provisioningStatus && plan.provisioningStatus !== "Success"
-                  ? plan.provisioningStatus
-                  : "";
-
-              wrapper.appendChild(checkbox);
-              wrapper.appendChild(label);
-              if (status.textContent) {
-                wrapper.appendChild(status);
-              }
-              planContainer.appendChild(wrapper);
-            });
-            syncHidden();
-            setStatus(formatAvailability(sku));
-          };
-
-          const populateSelect = () => {
-            if (!selectEl) {
-              return;
-            }
-            selectEl.innerHTML = "";
-            const defaultOption = document.createElement("option");
-            defaultOption.value = "";
-            defaultOption.textContent = "Do not assign a license";
-            selectEl.appendChild(defaultOption);
-            const entries = Array.from(skuMap.values());
-            entries.sort((a, b) =>
-              (a.skuPartNumber || "").localeCompare(b.skuPartNumber || "")
-            );
-            entries.forEach((sku) => {
-              const option = document.createElement("option");
-              option.value = sku.skuId || sku.id;
-              option.textContent = formatAvailability(sku);
-              selectEl.appendChild(option);
-            });
-            if (!entries.length) {
-              setStatus("No licenses available. Refresh the catalog on the Configuration page.");
-            }
-          };
-
-          const setValue = (skuId, disabledList, { skipManual = false } = {}) => {
-            currentSku = skuId || "";
-            disabledPlans = new Set(disabledList || []);
-            if (selectEl) {
-              selectEl.value = currentSku;
-            }
-            if (!skipManual && onManualChange) {
-              onManualChange();
-            }
-            renderPlans();
-          };
-
-          const loadSkus = async () => {
-            if (!m365Status?.configured) {
-              setStatus("Licensing is not configured.");
-              return;
-            }
-            try {
-              const response = await fetch("/api/m365/skus", {
-                headers: { Accept: "application/json" },
-              });
-              const payload = await response.json();
-              if (!response.ok) {
-                throw new Error(payload.error || payload.message || "Unable to load license catalog.");
-              }
-              skuMap.clear();
-              (payload.items || []).forEach((sku) => {
-                if (!sku || !sku.skuId) {
-                  return;
-                }
-                skuMap.set(sku.skuId, sku);
-              });
-              populateSelect();
-              renderPlans();
-              if (!skuMap.size) {
-                setStatus("No licenses available. Refresh the catalog on the Configuration page.");
-              } else if (!currentSku) {
-                setStatus("Select a license to customise apps.");
-              }
-              return payload;
-            } catch (error) {
-              setStatus(error instanceof Error ? error.message : String(error));
-              throw error;
-            }
-          };
-
-          if (selectEl) {
-            selectEl.addEventListener("change", (event) => {
-              const value = event.target.value;
-              currentSku = value;
-              disabledPlans = new Set();
-              if (onManualChange) {
-                onManualChange();
-              }
-              renderPlans();
-            });
-          }
-
-          return {
-            loadSkus,
-            setValue: (skuId, disabledList, skipManual = false) =>
-              setValue(skuId, disabledList, { skipManual }),
-            getValue: () => ({
-              skuId: currentSku,
-              disabledPlans: Array.from(disabledPlans),
-            }),
-            getLabel: (skuId) => {
-              const sku = skuMap.get(skuId);
-              return sku ? sku.skuPartNumber || sku.skuId : skuId;
-            },
-          };
-        }
-
-        function applyRoleLicenseDefaults(force = false) {
-          if (!licensePicker || !jobRoleInput) {
+        const applyRoleLicenseDefaults = (force = false) => {
+          if (!licenseManager || !jobRoleInput) {
             return;
           }
-          const roleName = jobRoleInput.value.trim();
-          if (!roleName) {
-            return;
-          }
-          const defaults = roleLicenseDefaults[roleName];
-          if (!defaults) {
+          const roleName = jobRoleInput.value?.trim() || "";
+          const defaultsEntry = roleLicenseDefaults[roleName];
+          const defaults = defaultsEntry?.licenses || [];
+          if (!defaults.length) {
             if (force) {
-              licensePicker.setValue("", [], true);
+              licenseManager.clear({ skipManual: true });
               licenseManuallyEdited = false;
             }
             return;
@@ -669,76 +839,67 @@
           if (!force && licenseManuallyEdited) {
             return;
           }
-          licensePicker.setValue(
-            defaults.license_sku_id || "",
-            defaults.disabled_service_plans || [],
-            true
-          );
+          licenseManager.setSelections(defaults, { skipManual: true });
           licenseManuallyEdited = false;
-        }
+        };
 
-        function applyTemplateLicenseDefaults() {
-          if (!licensePicker || !templateLicense?.license_sku_id) {
+        const applyTemplateLicenseDefaults = () => {
+          if (!licenseManager || !templateSelectionArray.length) {
             return;
           }
-          licensePicker.setValue(
-            templateLicense.license_sku_id,
-            templateLicense.disabled_service_plans || [],
-            true
-          );
+          licenseManager.setSelections(templateSelectionArray, { skipManual: true });
           licenseManuallyEdited = false;
-        }
+        };
 
-        function updateTemplateLicenseButton() {
-          if (!applyTemplateLicenseButton) {
-            return;
-          }
-          const hasTemplate = Boolean(templateLicense?.license_sku_id);
-          applyTemplateLicenseButton.disabled = !hasTemplate;
-        }
-
-        if (licenseSelect) {
-          licensePicker = createLicensePicker({
-            selectEl: licenseSelect,
-            planContainer: licensePlanList,
+        if (licenseCatalog && licenseHiddenInputs) {
+          licenseManager = createLicenseManager({
+            catalogEl: licenseCatalog,
             hiddenContainer: licenseHiddenInputs,
             statusEl: licenseStatusMessage,
-            planField: licensePlanField,
+            initialSelections: initialLicenseSelections,
             onManualChange: () => {
               licenseManuallyEdited = true;
             },
           });
-          licensePicker
+
+          licenseManager
             .loadSkus()
             .then(() => {
-              if (initialLicenseSku) {
-                licensePicker.setValue(initialLicenseSku, initialDisabledPlans, true);
-              } else if (templateLicense?.license_sku_id) {
+              if (initialLicenseSelections.length) {
+                licenseManager.setSelections(initialLicenseSelections, { skipManual: true });
+                licenseManuallyEdited = true;
+              } else if (templateSelectionArray.length) {
                 applyTemplateLicenseDefaults();
               } else {
                 applyRoleLicenseDefaults(true);
               }
-              updateTemplateLicenseButton();
             })
-            .catch((error) => console.error(error));
+            .catch(() => {
+              /* errors already surfaced via status message */
+            });
         }
 
         applyTemplateLicenseButton?.addEventListener("click", () => {
           applyTemplateLicenseDefaults();
-          licenseManuallyEdited = true;
         });
+
         applyRoleLicenseButton?.addEventListener("click", () => {
-          applyRoleLicenseDefaults(true);
-        });
-        clearLicenseButton?.addEventListener("click", () => {
-          if (!licensePicker) {
+          if (!licenseManager) {
             return;
           }
-          licensePicker.setValue("", [], true);
-          licenseManuallyEdited = true;
+          const roleName = jobRoleInput?.value?.trim() || "";
+          const defaultsEntry = roleLicenseDefaults[roleName];
+          licenseManager.setSelections(defaultsEntry?.licenses || [], { skipManual: true });
+          licenseManuallyEdited = false;
         });
-        updateTemplateLicenseButton();
 
+        clearLicenseButton?.addEventListener("click", () => {
+        if (!licenseManager) {
+          return;
+        }
+        licenseManager.clear();
+        licenseManuallyEdited = true;
+      });
         const formatGroupLabel = (value, friendly) => {
           if (friendly) {
             return friendly;
@@ -746,10 +907,9 @@
           if (!value) {
             return "";
           }
-          const match = value.match(/CN=([^,]+)/i);
+          const match = String(value).match(/CN=([^,]+)/i);
           return match ? match[1] : value;
         };
-
         const selectedGroupMap = new Map();
 
         const renderGroups = () => {
