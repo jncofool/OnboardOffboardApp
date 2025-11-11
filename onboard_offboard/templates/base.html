@@ -271,6 +271,90 @@
         color: #6c757d;
         font-size: 0.8rem;
       }
+      .license-catalog {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 0.85rem;
+        margin-top: 0.5rem;
+      }
+      .license-card {
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 0.9rem 1rem;
+        background: var(--card);
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        overflow: hidden;
+      }
+      .license-card-header {
+        display: flex;
+        gap: 0.75rem;
+        align-items: flex-start;
+        min-width: 0;
+      }
+      .license-card-checkbox {
+        margin-top: 0.25rem;
+      }
+      .license-card-body {
+        flex: 1;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+        min-width: 0;
+      }
+      .license-card-body h4 {
+        margin: 0;
+        font-size: 1.02rem;
+        font-weight: 600;
+      }
+      .license-card-body .license-detail {
+        font-size: 0.85rem;
+        color: #6c757d;
+        margin-top: 0.3rem;
+      }
+      .license-card.active {
+        border-color: var(--accent);
+        box-shadow: 0 0 0 3px rgba(10, 110, 253, 0.12);
+      }
+      .license-card.exhausted {
+        opacity: 0.6;
+      }
+      .license-card .license-availability {
+        font-weight: 600;
+        font-size: 0.85rem;
+        margin-top: 0.25rem;
+        color: #0f5132;
+      }
+      .license-card.exhausted .license-availability {
+        color: #842029;
+      }
+      .license-plan-group {
+        display: none;
+        flex-direction: column;
+        gap: 0.45rem;
+        padding-left: 0.85rem;
+        border-left: 3px solid rgba(59, 130, 246, 0.25);
+      }
+      .license-card.active .license-plan-group:not(.is-empty) {
+        display: flex;
+      }
+      .license-plan-item {
+        display: flex;
+        gap: 0.65rem;
+        align-items: flex-start;
+        min-width: 0;
+      }
+      .license-plan-item > div {
+        flex: 1 1 auto;
+        min-width: 0;
+        word-break: break-word;
+      }
+      .license-plan-item small {
+        display: block;
+        color: #6c757d;
+        font-size: 0.8rem;
+      }
       .field-actions {
         display: flex;
         flex-wrap: wrap;

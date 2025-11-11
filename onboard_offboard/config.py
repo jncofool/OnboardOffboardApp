@@ -59,6 +59,7 @@ class M365Config:
     client_secret: Optional[str] = None
     sku_cache_file: Path = field(default_factory=lambda: Path("data/m365_skus.json"))
     cache_ttl_minutes: int = 720  # 12 hours by default
+    default_usage_location: Optional[str] = None
 
     @property
     def has_credentials(self) -> bool:
@@ -371,6 +372,7 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
             "sku_cache_file": str(config.m365.sku_cache_file),
             "cache_ttl_minutes": config.m365.cache_ttl_minutes,
             "default_usage_location": config.m365.default_usage_location or "",
+<<<<<<< HEAD
         },
         "auth": {
             "enabled": config.auth.enabled,
@@ -380,6 +382,8 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
             "redirect_uri": config.auth.redirect_uri or "",
             "allowed_groups": list(config.auth.allowed_groups),
             "scopes": list(config.auth.scopes),
+=======
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
         },
     }
 

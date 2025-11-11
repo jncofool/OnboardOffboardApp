@@ -1,9 +1,13 @@
 """Flask-powered web interface for the onboarding/offboarding toolkit."""
 from __future__ import annotations
 
+import json
 import os
 import re
+<<<<<<< HEAD
 import secrets
+=======
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 import threading
 import time
 import unicodedata
@@ -11,7 +15,11 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+<<<<<<< HEAD
 from urllib.parse import unquote, urljoin
+=======
+from urllib.parse import unquote
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 
 import msal
 import requests
@@ -39,7 +47,7 @@ from .config import (
     load_config,
     save_config,
 )
-from .models import Employee, JobRole, normalize_person_name
+from .models import Employee, JobRole, LicenseSelection, normalize_person_name
 from .storage import load_job_roles, save_job_roles
 from .sync import run_sync_command
 from .m365_client import (
@@ -56,9 +64,49 @@ _DEFAULT_ATTRIBUTE_KEYS = ("title", "department", "company", "physicalDeliveryOf
 _LICENSE_WORKER_INTERVAL = 30
 _LICENSE_INITIAL_DELAY_SECONDS = 90
 _LICENSE_RETRY_SCHEDULE = (60, 120, 300, 600, 900)
+<<<<<<< HEAD
 _AUTH_EXEMPT_ENDPOINTS = {"login", "logout", "auth_callback", "static"}
 _DEFAULT_AUTH_SCOPES = ("https://graph.microsoft.com/User.Read",)
 _RESERVED_AUTH_SCOPES = {"openid", "profile", "offline_access"}
+=======
+
+
+def _parse_license_selections(raw_values: Iterable[str]) -> List[LicenseSelection]:
+    selections: List[LicenseSelection] = []
+    for raw in raw_values or []:
+        if not raw:
+            continue
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            continue
+        try:
+            selection = LicenseSelection.from_dict(payload).normalized()
+        except Exception:
+            continue
+        if selection.sku_id:
+            selections.append(selection)
+    return selections
+
+
+def _merge_license_selections(selections: Iterable[LicenseSelection]) -> List[LicenseSelection]:
+    merged: Dict[str, LicenseSelection] = {}
+    for selection in selections or []:
+        if not selection or not selection.sku_id:
+            continue
+        normalized = selection.normalized()
+        existing = merged.get(normalized.sku_id)
+        if existing:
+            combined = set(existing.disabled_plans)
+            combined.update(normalized.disabled_plans)
+            merged[normalized.sku_id] = LicenseSelection(
+                sku_id=normalized.sku_id,
+                disabled_plans=sorted(combined),
+            )
+        else:
+            merged[normalized.sku_id] = normalized
+    return list(merged.values())
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 
 
 def create_app(config_path: Optional[Path | str] = None) -> Flask:
@@ -81,6 +129,7 @@ def register_routes(app: Flask) -> None:
 
     _ensure_license_worker(app)
 
+<<<<<<< HEAD
     @app.before_request
     def _enforce_authentication() -> Optional[Any]:
         config = _load_app_config(app)
@@ -95,6 +144,8 @@ def register_routes(app: Flask) -> None:
         session["post_login_redirect"] = request.url
         return redirect(url_for("login"))
 
+=======
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
     @app.context_processor
     def inject_globals() -> Dict[str, Any]:
         config = _load_app_config(app)
@@ -275,6 +326,13 @@ def register_routes(app: Flask) -> None:
                     )
                 except ValueError as exc:
                     raise ValueError("Cache TTL must be a whole number of minutes.") from exc
+                default_usage_location_input = (
+                    request.form.get("m365_default_usage_location", "").strip().upper()
+                )
+                if default_usage_location_input:
+                    default_usage_location = default_usage_location_input
+                else:
+                    default_usage_location = current_m365.default_usage_location
 
                 m365 = M365Config(
                     tenant_id=tenant_id,
@@ -282,6 +340,7 @@ def register_routes(app: Flask) -> None:
                     client_secret=client_secret,
                     sku_cache_file=cache_path,
                     cache_ttl_minutes=max(1, cache_ttl),
+                    default_usage_location=default_usage_location,
                 )
 
                 auth_secret_input = request.form.get("auth_client_secret", "")
@@ -338,14 +397,24 @@ def register_routes(app: Flask) -> None:
         role_groups = {name: list(role.groups) for name, role in roles.items()}
         role_license_defaults = {
             name: {
+                "licenses": [selection.to_dict() for selection in role.licenses],
                 "license_sku_id": role.license_sku_id,
-                "disabled_service_plans": list(role.disabled_service_plans),
+                "disabled_service_plans": role.disabled_service_plans,
             }
             for name, role in roles.items()
         }
         selected_groups = _dedupe_preserve(request.form.getlist("groups"))
-        selected_license = (request.form.get("license_sku") or "").strip()
-        selected_disabled_plans = _dedupe_preserve(request.form.getlist("license_disabled_plan"))
+        legacy_license_sku = (request.form.get("license_sku") or "").strip()
+        legacy_disabled_plans = _dedupe_preserve(request.form.getlist("license_disabled_plan"))
+        legacy_selection = (
+            LicenseSelection(sku_id=legacy_license_sku, disabled_plans=legacy_disabled_plans).normalized()
+            if legacy_license_sku
+            else None
+        )
+        parsed_selections = _parse_license_selections(request.form.getlist("license_selection"))
+        if legacy_selection:
+            parsed_selections.append(legacy_selection)
+        selected_license_selections = _merge_license_selections(parsed_selections)
         m365_status = _build_m365_status(app, config)
 
         if request.method == "POST":
@@ -420,16 +489,17 @@ def register_routes(app: Flask) -> None:
                 else:
                     attributes.pop("physicalDeliveryOfficeName", None)
 
-                license_sku = (request.form.get("license_sku") or "").strip() or None
-                disabled_plans_form = _dedupe_preserve(request.form.getlist("license_disabled_plan"))
-
-                role_defaults = role_license_defaults.get(role_name) or {}
-                if not license_sku and role_defaults.get("license_sku_id"):
-                    license_sku = role_defaults.get("license_sku_id")
-                    disabled_plans_form = list(role_defaults.get("disabled_service_plans") or [])
-
-                selected_license = license_sku or ""
-                selected_disabled_plans = disabled_plans_form
+                parsed_form_selections = _parse_license_selections(request.form.getlist("license_selection"))
+                if legacy_selection:
+                    parsed_form_selections.append(legacy_selection)
+                form_license_selections = _merge_license_selections(parsed_form_selections)
+                if not form_license_selections:
+                    defaults_entry = role_license_defaults.get(role_name) or {}
+                    defaults_payload = defaults_entry.get("licenses") or []
+                    form_license_selections = _merge_license_selections(
+                        LicenseSelection.from_dict(entry) for entry in defaults_payload
+                    )
+                selected_license_selections = form_license_selections
 
                 job_role = replace(role, user_ou=chosen_ou or role.user_ou)
                 employee = Employee(
@@ -441,8 +511,7 @@ def register_routes(app: Flask) -> None:
                     manager_dn=effective_manager,
                     attributes=attributes,
                     groups=selected_groups,
-                    license_sku_id=license_sku,
-                    disabled_service_plans=disabled_plans_form,
+                    licenses=form_license_selections,
                 )
 
                 with ADClient(config.ldap) as client:
@@ -457,17 +526,46 @@ def register_routes(app: Flask) -> None:
                         default_manager_dn=effective_manager,
                         attributes=attributes,
                         groups=selected_groups,
+<<<<<<< HEAD
                         license_sku_id=license_sku,
                         disabled_service_plans=disabled_plans_form,
+=======
+                        licenses=form_license_selections,
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
                     )
                     if seed_status == "created":
                         flash(f"Saved job role template '{role_name}' for future use.", "info")
                 except Exception as exc:  # pragma: no cover - persistence errors should not block onboarding
                     flash(f"User created but job role defaults could not be stored: {exc}", "warning")
 
+<<<<<<< HEAD
                 if license_sku:
                     result["license_sku_id"] = license_sku
                     result["disabled_service_plans"] = disabled_plans_form
+=======
+                principal_candidates: List[str] = []
+                primary_principal = _derive_email(username, email_domain)
+                preferred_principal = (primary_principal or email or "").strip()
+                if email and email.strip().lower() != preferred_principal.lower():
+                    principal_candidates.append(email.strip())
+                if primary_principal and primary_principal.strip().lower() != preferred_principal.lower():
+                    principal_candidates.append(primary_principal.strip())
+                if username:
+                    principal_candidates.append(username.strip())
+
+                if form_license_selections:
+                    result["licenses"] = [selection.to_dict() for selection in form_license_selections]
+
+                if preferred_principal and form_license_selections:
+                    queued_license = _enqueue_license_jobs(
+                        app, config, preferred_principal, form_license_selections, alternates=principal_candidates
+                    )
+                    if queued_license:
+                        flash(
+                            "Microsoft 365 license assignment queued; it will apply shortly.",
+                            "info",
+                        )
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 
                 queued_license = _enqueue_license_job(
                     app, config, email, license_sku, disabled_plans_form
@@ -510,8 +608,9 @@ def register_routes(app: Flask) -> None:
             job_roles=roles,
             job_titles=job_titles,
             role_license_defaults=role_license_defaults,
-            selected_license=selected_license,
-            selected_disabled_plans=selected_disabled_plans,
+            selected_license=legacy_selection.sku_id if legacy_selection else "",
+            selected_disabled_plans=legacy_selection.disabled_plans if legacy_selection else [],
+            selected_license_selections=[selection.to_dict() for selection in selected_license_selections],
             m365_status=m365_status,
         )
 
@@ -896,11 +995,25 @@ def register_routes(app: Flask) -> None:
         groups_input = data.get("groups") or []
         groups = _dedupe_preserve(str(value).strip() for value in groups_input)
 
-        license_sku_id = str(data.get("license_sku_id") or "").strip() or None
-        disabled_plans_input = data.get("disabled_service_plans") or []
-        disabled_service_plans = _dedupe_preserve(
-            str(value).strip() for value in disabled_plans_input
-        )
+        licenses_input = data.get("licenses") or []
+        licenses: List[LicenseSelection] = []
+        if isinstance(licenses_input, list):
+            for entry in licenses_input:
+                try:
+                    selection = LicenseSelection.from_dict(entry).normalized()
+                    if selection.sku_id:
+                        licenses.append(selection)
+                except Exception:
+                    continue
+        else:
+            legacy_sku = str(data.get("license_sku_id") or "").strip()
+            if legacy_sku:
+                disabled_legacy = _dedupe_preserve(
+                    str(value).strip() for value in data.get("disabled_service_plans") or []
+                )
+                licenses.append(
+                    LicenseSelection(sku_id=legacy_sku, disabled_plans=disabled_legacy).normalized()
+                )
 
         role = JobRole(
             name=name,
@@ -909,8 +1022,7 @@ def register_routes(app: Flask) -> None:
             default_manager_dn=default_manager_dn or None,
             attributes=attributes,
             groups=groups,
-            license_sku_id=license_sku_id,
-            disabled_service_plans=disabled_service_plans,
+            licenses=licenses,
         )
         roles[name] = role
         save_job_roles(config.storage.job_roles_file, roles)
@@ -936,13 +1048,14 @@ def register_routes(app: Flask) -> None:
         managers, ous = _load_directory_context(config)
         companies, offices = _load_reference_values(config)
         role_groups = {name: list(role.groups) for name, role in roles.items()}
-        role_license_defaults = {
-            name: {
-                "license_sku_id": role.license_sku_id,
-                "disabled_service_plans": list(role.disabled_service_plans),
+        role_license_defaults = {}
+        for name, role in roles.items():
+            primary = role.primary_license
+            role_license_defaults[name] = {
+                "license_sku_id": primary.sku_id if primary else None,
+                "disabled_service_plans": list(primary.disabled_plans) if primary else [],
+                "licenses": [selection.to_dict() for selection in role.licenses],
             }
-            for name, role in roles.items()
-        }
 
         query = request.args.get("query", "").strip()
         user_dn = request.args.get("user_dn")
@@ -950,10 +1063,20 @@ def register_routes(app: Flask) -> None:
         selected_user: Optional[Dict[str, Any]] = None
         template_groups: List[str] = []
         selected_groups = _dedupe_preserve(request.form.getlist("groups"))
-        selected_license = (request.form.get("license_sku") or "").strip()
-        selected_disabled_plans = _dedupe_preserve(
-            request.form.getlist("license_disabled_plan")
+        legacy_license_sku = (request.form.get("license_sku") or "").strip()
+        legacy_disabled_plans = _dedupe_preserve(request.form.getlist("license_disabled_plan"))
+        legacy_selection = (
+            LicenseSelection(sku_id=legacy_license_sku, disabled_plans=legacy_disabled_plans).normalized()
+            if legacy_license_sku
+            else None
         )
+        parsed_selections = _parse_license_selections(request.form.getlist("license_selection"))
+        if legacy_selection:
+            parsed_selections.append(legacy_selection)
+        selected_license_selections = _merge_license_selections(parsed_selections)
+        primary_selection = selected_license_selections[0] if selected_license_selections else legacy_selection
+        selected_license = primary_selection.sku_id if primary_selection else ""
+        selected_disabled_plans = list(primary_selection.disabled_plans) if primary_selection else []
         template_license_selection: Optional[Dict[str, Any]] = None
         m365_status = _build_m365_status(app, config)
 
@@ -1010,6 +1133,7 @@ def register_routes(app: Flask) -> None:
                             if entry.get("skuId")
                         ]
                         if assigned:
+<<<<<<< HEAD
                             primary = assigned[0]
                             template_license_selection = {
                                 "license_sku_id": primary.get("skuId"),
@@ -1020,6 +1144,33 @@ def register_routes(app: Flask) -> None:
                                 "source_principal": graph_user.get("userPrincipalName")
                                 or lookup,
                             }
+=======
+                            licenses_payload: List[Dict[str, Any]] = []
+                            for entry in assigned:
+                                try:
+                                    selection = LicenseSelection.from_dict(
+                                        {
+                                            "sku_id": entry.get("skuId"),
+                                            "disabled_plans": list(entry.get("disabledPlans") or []),
+                                        }
+                                    ).normalized()
+                                except Exception:
+                                    continue
+                                if selection.sku_id:
+                                    licenses_payload.append(selection.to_dict())
+                            if licenses_payload:
+                                primary_dict = licenses_payload[0]
+                                template_license_selection = {
+                                    "license_sku_id": primary_dict.get("sku_id"),
+                                    "disabled_service_plans": list(
+                                        primary_dict.get("disabled_plans") or []
+                                    ),
+                                    "assigned_count": len(licenses_payload),
+                                    "source_principal": graph_user.get("userPrincipalName")
+                                    or lookup,
+                                    "licenses": licenses_payload,
+                                }
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
             except M365ClientError as exc:
                 flash(
                     f"Unable to read Microsoft 365 licenses for the template user: {exc}",
@@ -1028,12 +1179,35 @@ def register_routes(app: Flask) -> None:
             except Exception as exc:
                 flash(f"Unexpected Microsoft 365 license error: {exc}", "warning")
 
+<<<<<<< HEAD
         if not selected_license and template_license_selection:
             selected_license = template_license_selection.get("license_sku_id") or ""
         if not selected_disabled_plans and template_license_selection:
             selected_disabled_plans = list(
                 template_license_selection.get("disabled_service_plans") or []
             )
+=======
+        if not selected_license_selections and template_license_selection:
+            template_entries = template_license_selection.get("licenses") or []
+            if template_entries:
+                selected_license_selections = _merge_license_selections(
+                    LicenseSelection.from_dict(entry) for entry in template_entries
+                )
+        if not selected_license_selections and template_license_selection:
+            fallback_sku = template_license_selection.get("license_sku_id")
+            if fallback_sku:
+                selected_license_selections = _merge_license_selections(
+                    [
+                        LicenseSelection(
+                            sku_id=str(fallback_sku),
+                            disabled_plans=template_license_selection.get("disabled_service_plans") or [],
+                        )
+                    ]
+                )
+        primary_selection = selected_license_selections[0] if selected_license_selections else None
+        selected_license = primary_selection.sku_id if primary_selection else ""
+        selected_disabled_plans = list(primary_selection.disabled_plans) if primary_selection else []
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 
         template_manager_dn: Optional[str] = None
         template_manager_display: Optional[str] = None
@@ -1104,6 +1278,30 @@ def register_routes(app: Flask) -> None:
                     request.form.getlist("license_disabled_plan")
                 )
 
+                parsed_form_selections = _parse_license_selections(request.form.getlist("license_selection"))
+                legacy_license_sku = (request.form.get("license_sku") or "").strip()
+                legacy_disabled_plans = _dedupe_preserve(request.form.getlist("license_disabled_plan"))
+                legacy_form_selection = (
+                    LicenseSelection(sku_id=legacy_license_sku, disabled_plans=legacy_disabled_plans).normalized()
+                    if legacy_license_sku
+                    else None
+                )
+                if legacy_form_selection:
+                    parsed_form_selections.append(legacy_form_selection)
+                form_license_selections = _merge_license_selections(parsed_form_selections)
+                if not form_license_selections:
+                    defaults_entry = role_license_defaults.get(role_name) or {}
+                    defaults_payload: List[Dict[str, Any]] = defaults_entry.get("licenses") or []
+                    if not defaults_payload and template_license_selection:
+                        defaults_payload = template_license_selection.get("licenses") or []
+                    form_license_selections = _merge_license_selections(
+                        LicenseSelection.from_dict(entry) for entry in defaults_payload
+                    )
+                selected_license_selections = form_license_selections
+                primary_selection = selected_license_selections[0] if selected_license_selections else None
+                selected_license = primary_selection.sku_id if primary_selection else ""
+                selected_disabled_plans = list(primary_selection.disabled_plans) if primary_selection else []
+
                 if not all([first_name, last_name, username, email, role_name]):
                     raise ValueError("All fields except password and attributes are required.")
 
@@ -1151,8 +1349,12 @@ def register_routes(app: Flask) -> None:
                     manager_dn=manager_dn,
                     attributes=attributes,
                     groups=selected_groups,
+<<<<<<< HEAD
                     license_sku_id=selected_license or None,
                     disabled_service_plans=selected_disabled_plans,
+=======
+                    licenses=form_license_selections,
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
                 )
 
                 chosen_ou = chosen_ou or role.user_ou
@@ -1170,20 +1372,52 @@ def register_routes(app: Flask) -> None:
                         default_manager_dn=manager_dn,
                         attributes=attributes,
                         groups=selected_groups,
+<<<<<<< HEAD
                         license_sku_id=selected_license or None,
                         disabled_service_plans=selected_disabled_plans,
+=======
+                        licenses=form_license_selections,
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
                     )
                     if seed_status == "created":
                         flash(f"Saved job role template '{role_name}' for future use.", "info")
                 except Exception as exc:  # pragma: no cover - persistence errors should not block cloning
                     flash(f"Account cloned but job role defaults could not be stored: {exc}", "warning")
 
+<<<<<<< HEAD
                 if selected_license:
                     result["license_sku_id"] = selected_license
                     result["disabled_service_plans"] = selected_disabled_plans
                 queued_license = _enqueue_license_job(
                     app, config, email, selected_license, selected_disabled_plans
                 )
+=======
+                if primary_selection:
+                    result["license_sku_id"] = primary_selection.sku_id
+                    result["disabled_service_plans"] = list(primary_selection.disabled_plans)
+                if form_license_selections:
+                    result["licenses"] = [selection.to_dict() for selection in form_license_selections]
+
+                principal_candidates: List[str] = []
+                primary_principal = _derive_email(username, email_domain)
+                preferred_principal = (primary_principal or email or "").strip()
+                if email and email.strip().lower() != preferred_principal.lower():
+                    principal_candidates.append(email.strip())
+                if primary_principal and primary_principal.strip().lower() != preferred_principal.lower():
+                    principal_candidates.append(primary_principal.strip())
+                if username:
+                    principal_candidates.append(username.strip())
+
+                queued_license = False
+                if preferred_principal and form_license_selections:
+                    queued_license = _enqueue_license_jobs(
+                        app,
+                        config,
+                        preferred_principal,
+                        form_license_selections,
+                        alternates=principal_candidates,
+                    )
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
                 if queued_license:
                     flash(
                         "Microsoft 365 license assignment queued; it will apply shortly.",
@@ -1237,6 +1471,10 @@ def register_routes(app: Flask) -> None:
             role_license_defaults=role_license_defaults,
             selected_license=selected_license,
             selected_disabled_plans=selected_disabled_plans,
+<<<<<<< HEAD
+=======
+            selected_license_selections=[selection.to_dict() for selection in selected_license_selections],
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
             template_license_selection=template_license_selection,
             m365_status=m365_status,
             job_roles=roles,
@@ -1637,16 +1875,22 @@ def _derive_username(first_name: str, last_name: str) -> str:
 
 
 def _serialize_role(role: JobRole) -> Dict[str, Any]:
-    return {
+    licenses_payload = [selection.to_dict() for selection in getattr(role, "licenses", [])]
+    primary = getattr(role, "primary_license", None)
+    response: Dict[str, Any] = {
         "name": role.name,
         "description": role.description,
         "user_ou": role.user_ou,
         "default_manager_dn": role.default_manager_dn,
         "attributes": dict(role.attributes),
         "groups": list(role.groups),
-        "license_sku_id": role.license_sku_id,
-        "disabled_service_plans": list(role.disabled_service_plans),
+        "licenses": licenses_payload,
     }
+    # Retain backwards-compatible fields so existing UI/JS can continue to read them.
+    response["license_sku_id"] = getattr(role, "license_sku_id", None)
+    disabled = getattr(role, "disabled_service_plans", [])
+    response["disabled_service_plans"] = list(disabled or [])
+    return response
 
 
 def _dedupe_preserve(values: Iterable[str]) -> List[str]:
@@ -1728,8 +1972,12 @@ def _auto_seed_job_role(
     default_manager_dn: Optional[str],
     attributes: Dict[str, Any],
     groups: Iterable[str],
+<<<<<<< HEAD
     license_sku_id: Optional[str],
     disabled_service_plans: Iterable[str],
+=======
+    licenses: Iterable[LicenseSelection],
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 ) -> Optional[str]:
     """Persist a job role template based on the submitted onboarding data."""
 
@@ -1740,8 +1988,12 @@ def _auto_seed_job_role(
     role_ou = (user_ou or "").strip() or (config.ldap.user_ou or None)
     role_manager = (default_manager_dn or "").strip() or None
     role_groups = _dedupe_preserve(groups or [])
+<<<<<<< HEAD
     role_license = (license_sku_id or "").strip() or None
     role_disabled_plans = _dedupe_preserve(disabled_service_plans or [])
+=======
+    role_licenses = _merge_license_selections(licenses or [])
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
     role_attributes = _extract_role_attribute_defaults(normalized_name, attributes or {})
 
     existing = roles.get(normalized_name)
@@ -1756,8 +2008,12 @@ def _auto_seed_job_role(
             default_manager_dn=role_manager,
             attributes=role_attributes,
             groups=role_groups,
+<<<<<<< HEAD
             license_sku_id=role_license,
             disabled_service_plans=role_disabled_plans if role_license else [],
+=======
+            licenses=role_licenses,
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
         )
         created = True
         changed = True
@@ -1769,9 +2025,14 @@ def _auto_seed_job_role(
             updates["default_manager_dn"] = role_manager
         if role_groups and not existing.groups:
             updates["groups"] = role_groups
+<<<<<<< HEAD
         if role_license and not existing.license_sku_id:
             updates["license_sku_id"] = role_license
             updates["disabled_service_plans"] = role_disabled_plans
+=======
+        if role_licenses and not existing.licenses:
+            updates["licenses"] = role_licenses
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
         merged_attributes = dict(existing.attributes)
         attr_changed = False
         for key, value in role_attributes.items():
@@ -1831,13 +2092,21 @@ def _license_worker_loop(app: Flask) -> None:
                 if not client:
                     continue
                 for job in pending_jobs:
+<<<<<<< HEAD
                     _process_license_job(app, store, client, job)
+=======
+                    _process_license_job(app, config, store, client, job)
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
         except Exception as exc:  # pragma: no cover - worker resilience
             app.logger.exception("License worker encountered an error: %s", exc)
 
 
 def _process_license_job(
     app: Flask,
+<<<<<<< HEAD
+=======
+    config: AppConfig,
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
     store: LicenseJobStore,
     client: M365Client,
     job: LicenseJob,
@@ -1845,6 +2114,7 @@ def _process_license_job(
     retry_index = min(job.attempts, len(_LICENSE_RETRY_SCHEDULE) - 1)
     retry_delay = timedelta(seconds=_LICENSE_RETRY_SCHEDULE[retry_index])
 
+<<<<<<< HEAD
     lookup = job.principal
     try:
         graph_user = client.find_user(lookup, select="id,userPrincipalName")
@@ -1863,6 +2133,85 @@ def _process_license_job(
         return
 
     user_id = graph_user["id"]
+=======
+    lookup_candidates = [job.principal] + [candidate for candidate in job.principal_candidates if candidate]
+    graph_user: Optional[Dict[str, Any]] = None
+    chosen_lookup: Optional[str] = None
+    for candidate in lookup_candidates:
+        if not candidate:
+            continue
+        chosen_lookup = candidate
+        try:
+            graph_user = client.find_user(candidate, select="id,userPrincipalName,usageLocation")
+        except M365ClientError as exc:
+            store.defer_job(job.id, retry_delay, str(exc))
+            app.logger.warning("Microsoft 365 lookup failed for %s: %s", candidate, exc)
+            return
+        except Exception as exc:
+            store.defer_job(job.id, retry_delay, str(exc))
+            app.logger.exception("Unexpected error looking up %s: %s", candidate, exc)
+            return
+        if graph_user and graph_user.get("id"):
+            if candidate != job.principal:
+                job.principal = candidate
+                job.principal_candidates = [
+                    value for value in job.principal_candidates if value != candidate
+                ]
+                store.reset_from_copy(job)
+            break
+    else:
+        chosen_lookup = job.principal
+        store.defer_job(job.id, retry_delay, "User not yet available in Microsoft 365.")
+        app.logger.info(
+            "License assignment deferred for %s; user not found.",
+            chosen_lookup or "<unknown>",
+        )
+        return
+
+    lookup = chosen_lookup or job.principal
+
+    user_id = graph_user["id"]
+    usage_location = str(graph_user.get("usageLocation") or "").strip()
+    if not usage_location:
+        default_usage_location = str(config.m365.default_usage_location or "").strip()
+        if not default_usage_location:
+            store.defer_job(
+                job.id,
+                retry_delay,
+                "User missing usage location; configure m365.default_usage_location.",
+            )
+            app.logger.warning(
+                "Microsoft 365 assignLicense deferred for %s (%s): usageLocation missing "
+                "and no default configured.",
+                lookup,
+                job.sku_id,
+            )
+            return
+        try:
+            client.update_user(user_id, usageLocation=default_usage_location)
+            usage_location = default_usage_location
+            app.logger.info(
+                "Set usageLocation=%s for %s prior to license assignment.",
+                default_usage_location,
+                lookup,
+            )
+        except M365ClientError as exc:
+            store.defer_job(job.id, retry_delay, f"Unable to set usageLocation: {exc}")
+            app.logger.warning(
+                "Microsoft 365 usageLocation update deferred for %s (%s): %s",
+                lookup,
+                job.sku_id,
+                exc,
+            )
+            return
+        except Exception as exc:
+            store.defer_job(job.id, retry_delay, str(exc))
+            app.logger.exception(
+                "Unexpected error setting usageLocation for %s: %s", lookup, exc
+            )
+            return
+
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
     try:
         client.assign_license(user_id, job.sku_id, job.disabled_plans)
     except M365ClientError as exc:
@@ -1891,6 +2240,10 @@ def _enqueue_license_job(
     principal: Optional[str],
     sku_id: Optional[str],
     disabled_plans: Iterable[str],
+<<<<<<< HEAD
+=======
+    alternates: Optional[Iterable[str]] = None,
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 ) -> bool:
     if not principal or not sku_id:
         return False
@@ -1906,6 +2259,10 @@ def _enqueue_license_job(
             principal=principal,
             sku_id=sku_id,
             disabled_plans=disabled_plans,
+<<<<<<< HEAD
+=======
+            alternates=alternates or [],
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
             delay_seconds=_LICENSE_INITIAL_DELAY_SECONDS,
         )
         app.logger.info("Queued Microsoft 365 license assignment for %s (%s).", principal, sku_id)
@@ -1915,6 +2272,30 @@ def _enqueue_license_job(
         return False
 
 
+<<<<<<< HEAD
+=======
+def _enqueue_license_jobs(
+    app: Flask,
+    config: AppConfig,
+    principal: Optional[str],
+    selections: Iterable[LicenseSelection],
+    alternates: Optional[Iterable[str]] = None,
+) -> bool:
+    queued_any = False
+    for selection in _merge_license_selections(selections):
+        queued = _enqueue_license_job(
+            app,
+            config,
+            principal,
+            selection.sku_id,
+            selection.disabled_plans,
+            alternates=alternates,
+        )
+        queued_any = queued_any or queued
+    return queued_any
+
+
+>>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 def _trigger_sync(config: AppConfig) -> None:
     try:
         run_sync_command(config.sync)
