@@ -109,6 +109,18 @@ python -m onboard_offboard onboard Mark Daneshvar mdaneshvar mark.daneshvar@exam
 
 The onboarding command creates the user in Active Directory, assigns the configured (or overridden) manager, and executes the sync command defined in your configuration so the user flows to Microsoft 365.
 
+## Microsoft 365 licensing workflow
+- Configure the tenant ID, client ID, and **Default Usage Location** on the Configuration page (store the client secret in an environment variable such as `ONBOARD_M365_CLIENT_SECRET`).
+- Use the *Refresh License Catalog* button to pull the latest `/subscribedSkus`. The catalog is cached locally according to `m365.cache_ttl_minutes`.
+- The onboarding and cloning forms render a card-based picker for SKUs and service plans. Job roles can also store default license selections via the same UI.
+- When a submission includes licenses, the background worker waits for Azure AD to surface the new user, sets `usageLocation` if it's still missing (using the configured default), and then calls `assignLicense` for each SKU. Failures are retried according to the backoff schedule and logged so you can investigate.
+
+## Portal authentication (Entra ID)
+- Enable the *Portal Authentication* section on the Configuration page to require users to sign in with Entra ID (Azure AD).
+- Provide the app registration's tenant ID, client ID, and client secret (store the secret in `ONBOARD_AUTH_CLIENT_SECRET`).
+- List one or more security-group object IDs under **Allowed groups**; only members of those groups will be able to use the portal. Leave the list empty to allow any authenticated user in the tenant.
+- The scopes field defaults to `User.Read` and `GroupMember.Read.All`. Make sure those delegated Microsoft Graph permissions are granted on the app registration so the portal can verify group membership.
+
 ## Roadmap
 - Attach security and Microsoft 365 groups during onboarding.
 - Integrate with SaaS APIs for downstream provisioning.

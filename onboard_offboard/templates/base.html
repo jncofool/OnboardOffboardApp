@@ -37,6 +37,15 @@
         color: var(--accent);
         font-weight: 600;
       }
+      .header-right {
+        display: flex;
+        align-items: center;
+        gap: 1rem;
+      }
+      .user-status {
+        font-size: 0.9rem;
+        color: #6c757d;
+      }
       main {
         padding: 2rem;
         max-width: 960px;
@@ -282,6 +291,14 @@
         <a href="{{ url_for('delete_user') }}">Offboard</a>
         <a href="{{ url_for('edit_config') }}">Configuration</a>
       </nav>
+      <div class="header-right">
+        {% if current_user %}
+          <span class="user-status">Signed in as {{ current_user.name or current_user.upn }}</span>
+          <a class="button secondary" href="{{ url_for('logout') }}">Sign out</a>
+        {% elif app_config.auth.enabled %}
+          <a class="button secondary" href="{{ url_for('login') }}">Sign in</a>
+        {% endif %}
+      </div>
     </header>
     <main>
       {% with messages = get_flashed_messages(with_categories=true) %}

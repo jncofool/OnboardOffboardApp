@@ -66,6 +66,24 @@ class M365Config:
 
 
 @dataclass
+@dataclass
+class AuthConfig:
+    """Settings for Entra ID / Microsoft identity authentication."""
+
+    enabled: bool = False
+    tenant_id: Optional[str] = None
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    redirect_uri: Optional[str] = None
+    allowed_groups: tuple[str, ...] = ()
+    scopes: tuple[str, ...] = ("https://graph.microsoft.com/User.Read",)
+
+    @property
+    def has_credentials(self) -> bool:
+        return bool(self.tenant_id and self.client_id and self.client_secret)
+
+
+@dataclass
 class AppConfig:
     """Aggregate configuration for the application."""
 
@@ -73,6 +91,7 @@ class AppConfig:
     sync: SyncConfig
     storage: StorageConfig = field(default_factory=StorageConfig)
     m365: M365Config = field(default_factory=M365Config)
+    auth: AuthConfig = field(default_factory=AuthConfig)
 
 
 class ConfigurationError(RuntimeError):
@@ -269,9 +288,47 @@ def load_config(path: Optional[Path] = None) -> AppConfig:
         client_secret=_optional_str(m365_section.get("client_secret")),
         sku_cache_file=cache_path,
         cache_ttl_minutes=cache_ttl,
+        default_usage_location=_optional_str(m365_section.get("default_usage_location")),
     )
 
-    return AppConfig(ldap=ldap_config, sync=sync_config, storage=storage_config, m365=m365_config)
+    auth_section = config_dict.get("auth", {})
+    allowed_groups = tuple(
+        filter(
+            None,
+            [
+                entry.strip()
+                for entry in _normalize_sequence(auth_section.get("allowed_groups", ()))
+            ],
+        )
+    )
+    scopes = tuple(
+        filter(
+            None,
+            [
+                entry.strip()
+                for entry in _normalize_sequence(
+                    auth_section.get("scopes", ("https://graph.microsoft.com/User.Read",))
+                )
+            ],
+        )
+    ) or ("https://graph.microsoft.com/User.Read",)
+    auth_config = AuthConfig(
+        enabled=_to_bool(auth_section.get("enabled", False)),
+        tenant_id=_optional_str(auth_section.get("tenant_id")),
+        client_id=_optional_str(auth_section.get("client_id")),
+        client_secret=_optional_str(auth_section.get("client_secret")),
+        redirect_uri=_optional_str(auth_section.get("redirect_uri")),
+        allowed_groups=allowed_groups,
+        scopes=scopes,
+    )
+
+    return AppConfig(
+        ldap=ldap_config,
+        sync=sync_config,
+        storage=storage_config,
+        m365=m365_config,
+        auth=auth_config,
+    )
 
 
 def config_to_dict(config: AppConfig) -> Dict[str, Any]:
@@ -313,6 +370,16 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
             "client_secret": config.m365.client_secret or "",
             "sku_cache_file": str(config.m365.sku_cache_file),
             "cache_ttl_minutes": config.m365.cache_ttl_minutes,
+            "default_usage_location": config.m365.default_usage_location or "",
+        },
+        "auth": {
+            "enabled": config.auth.enabled,
+            "tenant_id": config.auth.tenant_id or "",
+            "client_id": config.auth.client_id or "",
+            "client_secret": config.auth.client_secret or "",
+            "redirect_uri": config.auth.redirect_uri or "",
+            "allowed_groups": list(config.auth.allowed_groups),
+            "scopes": list(config.auth.scopes),
         },
     }
 
@@ -337,6 +404,7 @@ __all__ = [
     "SyncConfig",
     "StorageConfig",
     "M365Config",
+    "AuthConfig",
     "save_config",
     "load_config",
 ]

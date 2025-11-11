@@ -160,6 +160,45 @@
       </div>
     </section>
 
+    <section>
+      <h2>Portal Authentication (Entra ID)</h2>
+      <p>Require users to sign in with your Entra ID tenant and optionally restrict access to specific security groups.</p>
+      <div class="field">
+        <label>
+          <input type="checkbox" name="auth_enabled" {% if config.auth.enabled %}checked{% endif %} />
+          Enable Entra ID authentication
+        </label>
+      </div>
+      <div class="field-grid">
+        <div class="field">
+          <label for="auth_tenant_id">Tenant ID</label>
+          <input id="auth_tenant_id" name="auth_tenant_id" type="text" value="{{ config.auth.tenant_id or '' }}" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="auth_client_id">Client ID</label>
+          <input id="auth_client_id" name="auth_client_id" type="text" value="{{ config.auth.client_id or '' }}" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="auth_client_secret">Client Secret</label>
+          <input id="auth_client_secret" name="auth_client_secret" type="password" value="" placeholder="Leave blank to keep existing secret" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="auth_redirect_uri">Redirect URI</label>
+          <input id="auth_redirect_uri" name="auth_redirect_uri" type="text" value="{{ config.auth.redirect_uri or '' }}" placeholder="http://localhost:5000/auth/callback" />
+        </div>
+      </div>
+      <div class="field">
+        <label for="auth_allowed_groups">Allowed Group Object IDs (one per line)</label>
+        <textarea id="auth_allowed_groups" name="auth_allowed_groups" placeholder="00000000-0000-0000-0000-000000000000&#10;11111111-1111-1111-1111-111111111111">{{ config.auth.allowed_groups | join('\n') }}</textarea>
+        <div class="hint">Leave blank to allow any user in the tenant.</div>
+      </div>
+      <div class="field">
+        <label for="auth_scopes">Requested Scopes (one per line)</label>
+        <textarea id="auth_scopes" name="auth_scopes">{{ config.auth.scopes | join('\n') }}</textarea>
+        <div class="hint">Include delegated Microsoft Graph scopes such as User.Read and GroupMember.Read.All.</div>
+      </div>
+    </section>
+
     <div class="field">
       <button type="submit">Save Configuration</button>
     </div>

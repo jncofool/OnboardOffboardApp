@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 import threading
 import time
 import unicodedata
@@ -10,13 +11,26 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-from urllib.parse import unquote
+from urllib.parse import unquote, urljoin
 
-from flask import Flask, flash, jsonify, redirect, render_template, request, url_for
+import msal
+import requests
+from flask import (
+    Flask,
+    flash,
+    g,
+    jsonify,
+    redirect,
+    render_template,
+    request,
+    session,
+    url_for,
+)
 
 from .ad_client import ADClient
 from .config import (
     AppConfig,
+    AuthConfig,
     LDAPConfig,
     M365Config,
     SyncConfig,
@@ -42,6 +56,9 @@ _DEFAULT_ATTRIBUTE_KEYS = ("title", "department", "company", "physicalDeliveryOf
 _LICENSE_WORKER_INTERVAL = 30
 _LICENSE_INITIAL_DELAY_SECONDS = 90
 _LICENSE_RETRY_SCHEDULE = (60, 120, 300, 600, 900)
+_AUTH_EXEMPT_ENDPOINTS = {"login", "logout", "auth_callback", "static"}
+_DEFAULT_AUTH_SCOPES = ("https://graph.microsoft.com/User.Read",)
+_RESERVED_AUTH_SCOPES = {"openid", "profile", "offline_access"}
 
 
 def create_app(config_path: Optional[Path | str] = None) -> Flask:
@@ -64,6 +81,20 @@ def register_routes(app: Flask) -> None:
 
     _ensure_license_worker(app)
 
+    @app.before_request
+    def _enforce_authentication() -> Optional[Any]:
+        config = _load_app_config(app)
+        g.current_user = session.get("user")
+        if not config.auth.enabled:
+            return None
+        endpoint = (request.endpoint or "").split(".")[0]
+        if endpoint in _AUTH_EXEMPT_ENDPOINTS or endpoint.startswith("static"):
+            return None
+        if session.get("user"):
+            return None
+        session["post_login_redirect"] = request.url
+        return redirect(url_for("login"))
+
     @app.context_processor
     def inject_globals() -> Dict[str, Any]:
         config = _load_app_config(app)
@@ -71,7 +102,110 @@ def register_routes(app: Flask) -> None:
         return {
             "app_config": config,
             "job_roles": roles,
+            "current_user": session.get("user"),
         }
+
+    @app.route("/login")
+    def login() -> Any:
+        config = _load_app_config(app)
+        if not config.auth.enabled:
+            flash("Authentication is not enabled.", "error")
+            return redirect(url_for("index"))
+        if not config.auth.has_credentials:
+            flash("Authentication is enabled but credentials are missing.", "error")
+            return redirect(url_for("index"))
+
+        state = secrets.token_urlsafe(32)
+        session["auth_state"] = state
+        if "post_login_redirect" not in session:
+            session["post_login_redirect"] = request.args.get("next") or url_for("index")
+
+        client = _build_msal_client(config.auth)
+        redirect_uri = _auth_redirect_uri(config.auth)
+        scopes = _sanitize_scopes(config.auth.scopes)
+        auth_url = client.get_authorization_request_url(
+            scopes=scopes,
+            state=state,
+            redirect_uri=redirect_uri,
+            prompt="select_account",
+        )
+        return redirect(auth_url)
+
+    @app.route("/logout")
+    def logout() -> Any:
+        session.clear()
+        flash("You have been signed out.", "success")
+        return redirect(url_for("index"))
+
+    @app.route("/auth/callback")
+    def auth_callback() -> Any:
+        config = _load_app_config(app)
+        if not config.auth.enabled:
+            flash("Authentication is not enabled.", "error")
+            return redirect(url_for("index"))
+
+        expected_state = session.get("auth_state")
+        returned_state = request.args.get("state")
+        if not expected_state or expected_state != returned_state:
+            flash("Unable to validate the sign-in response. Please try again.", "error")
+            return redirect(url_for("login"))
+        session.pop("auth_state", None)
+
+        if "error" in request.args:
+            flash(request.args.get("error_description") or "Sign-in was cancelled.", "error")
+            return redirect(url_for("login"))
+
+        code = request.args.get("code")
+        if not code:
+            flash("Missing authorization code.", "error")
+            return redirect(url_for("login"))
+
+        client = _build_msal_client(config.auth)
+        redirect_uri = _auth_redirect_uri(config.auth)
+        scopes = _sanitize_scopes(config.auth.scopes)
+        token_result = client.acquire_token_by_authorization_code(
+            code,
+            scopes=list(scopes),
+            redirect_uri=redirect_uri,
+        )
+        if "access_token" not in token_result:
+            message = token_result.get("error_description") or "Unable to complete sign-in."
+            flash(message, "error")
+            return redirect(url_for("login"))
+
+        claims = token_result.get("id_token_claims") or {}
+        app.logger.debug(
+            "Received ID token for %s (oid=%s); token groups=%s",
+            claims.get("preferred_username") or claims.get("email"),
+            claims.get("oid"),
+            ", ".join(claims.get("groups") or []) or "<none>",
+        )
+        allowed_groups = set(config.auth.allowed_groups or [])
+        user_groups = _extract_user_groups(claims, token_result, app.logger)
+        if allowed_groups and user_groups.isdisjoint(allowed_groups):
+            app.logger.warning(
+                "Access denied for %s (oid=%s). Allowed groups=%s; user groups=%s",
+                claims.get("preferred_username") or claims.get("email"),
+                claims.get("oid"),
+                ", ".join(sorted(allowed_groups)) or "<none>",
+                ", ".join(sorted(user_groups)) or "<none>",
+            )
+            flash("You do not have access to this application.", "error")
+            return redirect(url_for("login"))
+
+        session["user"] = {
+            "name": claims.get("name") or claims.get("preferred_username"),
+            "upn": claims.get("preferred_username") or claims.get("email"),
+            "oid": claims.get("oid"),
+            "groups": list(user_groups),
+        }
+        app.logger.info(
+            "User %s (oid=%s) signed in successfully.",
+            session["user"]["upn"],
+            session["user"]["oid"],
+        )
+        destination = session.pop("post_login_redirect", url_for("index"))
+        return redirect(destination)
 
     @app.route("/")
     def index() -> str:
@@ -120,6 +254,7 @@ def register_routes(app: Flask) -> None:
                 )
 
                 current_m365 = getattr(config, "m365", M365Config())
+                current_auth = getattr(config, "auth", AuthConfig())
                 tenant_id = request.form.get("m365_tenant_id", "").strip() or None
                 client_id = request.form.get("m365_client_id", "").strip() or None
                 secret_input = request.form.get("m365_client_secret", "")
@@ -149,7 +284,33 @@ def register_routes(app: Flask) -> None:
                     cache_ttl_minutes=max(1, cache_ttl),
                 )
 
-                updated = AppConfig(ldap=ldap, sync=sync, storage=storage, m365=m365)
+                auth_secret_input = request.form.get("auth_client_secret", "")
+                auth_client_secret = auth_secret_input.strip() or current_auth.client_secret
+                allowed_groups_raw = request.form.get("auth_allowed_groups", "")
+                allowed_groups = tuple(
+                    filter(
+                        None,
+                        [entry.strip() for entry in allowed_groups_raw.splitlines()],
+                    )
+                )
+                scopes_raw = request.form.get("auth_scopes", "")
+                scopes = tuple(
+                    filter(
+                        None,
+                        [entry.strip() for entry in scopes_raw.splitlines()],
+                    )
+                ) or current_auth.scopes
+                auth = AuthConfig(
+                    enabled=request.form.get("auth_enabled") == "on",
+                    tenant_id=request.form.get("auth_tenant_id", "").strip() or None,
+                    client_id=request.form.get("auth_client_id", "").strip() or None,
+                    client_secret=auth_client_secret,
+                    redirect_uri=request.form.get("auth_redirect_uri", "").strip() or None,
+                    allowed_groups=allowed_groups,
+                    scopes=scopes,
+                )
+
+                updated = AppConfig(ldap=ldap, sync=sync, storage=storage, m365=m365, auth=auth)
                 save_config(updated, app.config.get("CONFIG_PATH"))
                 flash("Configuration updated successfully.", "success")
                 return redirect(url_for("edit_config"))
@@ -1143,6 +1304,80 @@ def _get_m365_client(app: Flask, config: AppConfig) -> Optional[M365Client]:
     app.config["_M365_CLIENT"] = client
     app.config["_M365_CONFIG_SIGNATURE"] = signature
     return client
+
+
+def _build_msal_client(auth_config: AuthConfig) -> msal.ConfidentialClientApplication:
+    authority = f"https://login.microsoftonline.com/{auth_config.tenant_id or 'common'}"
+    return msal.ConfidentialClientApplication(
+        client_id=auth_config.client_id,
+        client_credential=auth_config.client_secret,
+        authority=authority,
+    )
+
+
+def _auth_redirect_uri(auth_config: AuthConfig) -> str:
+    if auth_config.redirect_uri:
+        return auth_config.redirect_uri
+    return urljoin(request.url_root, url_for("auth_callback").lstrip("/"))
+
+
+def _sanitize_scopes(scopes: Iterable[str]) -> List[str]:
+    requested = [scope.strip() for scope in scopes or _DEFAULT_AUTH_SCOPES if scope.strip()]
+    filtered = [scope for scope in requested if scope.lower() not in _RESERVED_AUTH_SCOPES]
+    if not filtered:
+        filtered = list(_DEFAULT_AUTH_SCOPES)
+    # Preserve order while removing duplicates
+    seen: set[str] = set()
+    result: List[str] = []
+    for scope in filtered:
+        if scope not in seen:
+            seen.add(scope)
+            result.append(scope)
+    return result
+
+
+def _extract_user_groups(
+    claims: Dict[str, Any],
+    token_result: Dict[str, Any],
+    logger: Any,
+) -> set[str]:
+    token_groups = set(claims.get("groups") or [])
+    if token_groups:
+        logger.debug("Token already contained %d group(s).", len(token_groups))
+        return token_groups
+
+    claim_names = claims.get("_claim_names") or {}
+    if "groups" not in claim_names:
+        return set()
+
+    access_token = token_result.get("access_token")
+    if not access_token:
+        logger.warning("No access token present; unable to query memberOf.")
+        return set()
+
+    try:
+        fetched = _fetch_member_groups(access_token)
+        logger.debug("Fetched %d group(s) via Graph fallback: %s", len(fetched), ", ".join(fetched))
+        return fetched
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Unable to fetch group membership from Graph: %s", exc)
+        return set()
+
+
+def _fetch_member_groups(access_token: str) -> set[str]:
+    url = "https://graph.microsoft.com/v1.0/me/memberOf?$select=id"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    groups: set[str] = set()
+    while url:
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        payload = response.json()
+        for entry in payload.get("value", []):
+            group_id = entry.get("id")
+            if group_id:
+                groups.add(group_id)
+        url = payload.get("@odata.nextLink")
+    return groups
 
 
 def _build_m365_status(app: Flask, config: AppConfig) -> Dict[str, Any]:

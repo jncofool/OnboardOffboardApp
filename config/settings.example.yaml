@@ -20,3 +20,23 @@ sync:
 
 storage:
   job_roles_file: data/job_roles.yaml
+  license_jobs_file: data/license_jobs.json
+
+m365:
+  tenant_id: ""
+  client_id: ""
+  client_secret: ""
+  sku_cache_file: data/m365_skus.json
+  cache_ttl_minutes: 720
+  default_usage_location: ""
+
+auth:
+  enabled: false
+  tenant_id: ""
+  client_id: ""
+  client_secret: ""
+  redirect_uri: "http://localhost:5000/auth/callback"
+  allowed_groups: []
+  scopes:
+    - https://graph.microsoft.com/User.Read
+    - https://graph.microsoft.com/GroupMember.Read.All
