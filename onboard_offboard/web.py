@@ -4,10 +4,7 @@ from __future__ import annotations
 import json
 import os
 import re
-<<<<<<< HEAD
 import secrets
-=======
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 import threading
 import time
 import unicodedata
@@ -15,11 +12,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
-<<<<<<< HEAD
-from urllib.parse import unquote, urljoin
-=======
 from urllib.parse import unquote
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 
 import msal
 import requests
@@ -34,6 +27,7 @@ from flask import (
     session,
     url_for,
 )
+from flask import has_request_context
 
 from .ad_client import ADClient
 from .config import (
@@ -64,11 +58,9 @@ _DEFAULT_ATTRIBUTE_KEYS = ("title", "department", "company", "physicalDeliveryOf
 _LICENSE_WORKER_INTERVAL = 30
 _LICENSE_INITIAL_DELAY_SECONDS = 90
 _LICENSE_RETRY_SCHEDULE = (60, 120, 300, 600, 900)
-<<<<<<< HEAD
 _AUTH_EXEMPT_ENDPOINTS = {"login", "logout", "auth_callback", "static"}
 _DEFAULT_AUTH_SCOPES = ("https://graph.microsoft.com/User.Read",)
 _RESERVED_AUTH_SCOPES = {"openid", "profile", "offline_access"}
-=======
 
 
 def _parse_license_selections(raw_values: Iterable[str]) -> List[LicenseSelection]:
@@ -106,7 +98,6 @@ def _merge_license_selections(selections: Iterable[LicenseSelection]) -> List[Li
         else:
             merged[normalized.sku_id] = normalized
     return list(merged.values())
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 
 
 def create_app(config_path: Optional[Path | str] = None) -> Flask:
@@ -129,23 +120,24 @@ def register_routes(app: Flask) -> None:
 
     _ensure_license_worker(app)
 
-<<<<<<< HEAD
     @app.before_request
     def _enforce_authentication() -> Optional[Any]:
         config = _load_app_config(app)
-        g.current_user = session.get("user")
+        current_user = session.get("user")
+        g.current_user = current_user
         if not config.auth.enabled:
             return None
-        endpoint = (request.endpoint or "").split(".")[0]
-        if endpoint in _AUTH_EXEMPT_ENDPOINTS or endpoint.startswith("static"):
+
+        endpoint = request.endpoint or ""
+        if endpoint.startswith("static") or endpoint in _AUTH_EXEMPT_ENDPOINTS:
             return None
-        if session.get("user"):
+
+        if current_user:
             return None
+
         session["post_login_redirect"] = request.url
         return redirect(url_for("login"))
 
-=======
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
     @app.context_processor
     def inject_globals() -> Dict[str, Any]:
         config = _load_app_config(app)
@@ -163,17 +155,20 @@ def register_routes(app: Flask) -> None:
             flash("Authentication is not enabled.", "error")
             return redirect(url_for("index"))
         if not config.auth.has_credentials:
-            flash("Authentication is enabled but credentials are missing.", "error")
+            flash("Authentication is enabled but not fully configured.", "error")
             return redirect(url_for("index"))
 
         state = secrets.token_urlsafe(32)
         session["auth_state"] = state
-        if "post_login_redirect" not in session:
-            session["post_login_redirect"] = request.args.get("next") or url_for("index")
+        next_url = request.args.get("next") or session.get("post_login_redirect") or url_for("index")
+        session["post_login_redirect"] = next_url
 
         client = _build_msal_client(config.auth)
         redirect_uri = _auth_redirect_uri(config.auth)
-        scopes = _sanitize_scopes(config.auth.scopes)
+        requested_scopes = list(config.auth.scopes or _DEFAULT_AUTH_SCOPES)
+        scopes = [scope for scope in requested_scopes if scope.lower() not in _RESERVED_AUTH_SCOPES]
+        if not scopes:
+            scopes = list(_DEFAULT_AUTH_SCOPES)
         auth_url = client.get_authorization_request_url(
             scopes=scopes,
             state=state,
@@ -196,9 +191,8 @@ def register_routes(app: Flask) -> None:
             return redirect(url_for("index"))
 
         expected_state = session.get("auth_state")
-        returned_state = request.args.get("state")
-        if not expected_state or expected_state != returned_state:
-            flash("Unable to validate the sign-in response. Please try again.", "error")
+        if not expected_state or expected_state != request.args.get("state"):
+            flash("Authentication response could not be validated. Please try again.", "error")
             return redirect(url_for("login"))
         session.pop("auth_state", None)
 
@@ -213,10 +207,10 @@ def register_routes(app: Flask) -> None:
 
         client = _build_msal_client(config.auth)
         redirect_uri = _auth_redirect_uri(config.auth)
-        scopes = _sanitize_scopes(config.auth.scopes)
+        token_scopes = list(config.auth.scopes or _DEFAULT_AUTH_SCOPES)
         token_result = client.acquire_token_by_authorization_code(
             code,
-            scopes=list(scopes),
+            scopes=token_scopes,
             redirect_uri=redirect_uri,
         )
         if "access_token" not in token_result:
@@ -225,37 +219,20 @@ def register_routes(app: Flask) -> None:
             return redirect(url_for("login"))
 
         claims = token_result.get("id_token_claims") or {}
-        app.logger.debug(
-            "Received ID token for %s (oid=%s); token groups=%s",
-            claims.get("preferred_username") or claims.get("email"),
-            claims.get("oid"),
-            ", ".join(claims.get("groups") or []) or "<none>",
-        )
         allowed_groups = set(config.auth.allowed_groups or [])
         user_groups = _extract_user_groups(claims, token_result, app.logger)
         if allowed_groups and user_groups.isdisjoint(allowed_groups):
-            app.logger.warning(
-                "Access denied for %s (oid=%s). Allowed groups=%s; user groups=%s",
-                claims.get("preferred_username") or claims.get("email"),
-                claims.get("oid"),
-                ", ".join(sorted(allowed_groups)) or "<none>",
-                ", ".join(sorted(user_groups)) or "<none>",
-            )
             flash("You do not have access to this application.", "error")
             return redirect(url_for("login"))
 
         session["user"] = {
-            "name": claims.get("name") or claims.get("preferred_username"),
+            "name": claims.get("name") or claims.get("preferred_username") or "Signed-in user",
             "upn": claims.get("preferred_username") or claims.get("email"),
             "oid": claims.get("oid"),
             "groups": list(user_groups),
         }
-        app.logger.info(
-            "User %s (oid=%s) signed in successfully.",
-            session["user"]["upn"],
-            session["user"]["oid"],
-        )
         destination = session.pop("post_login_redirect", url_for("index"))
+        flash("Signed in successfully.", "success")
         return redirect(destination)
 
     @app.route("/")
@@ -343,30 +320,27 @@ def register_routes(app: Flask) -> None:
                     default_usage_location=default_usage_location,
                 )
 
+                auth_enabled = request.form.get("auth_enabled") == "on"
                 auth_secret_input = request.form.get("auth_client_secret", "")
                 auth_client_secret = auth_secret_input.strip() or current_auth.client_secret
                 allowed_groups_raw = request.form.get("auth_allowed_groups", "")
                 allowed_groups = tuple(
                     filter(
                         None,
-                        [entry.strip() for entry in allowed_groups_raw.splitlines()],
+                        [
+                            line.strip()
+                            for line in allowed_groups_raw.splitlines()
+                        ],
                     )
                 )
-                scopes_raw = request.form.get("auth_scopes", "")
-                scopes = tuple(
-                    filter(
-                        None,
-                        [entry.strip() for entry in scopes_raw.splitlines()],
-                    )
-                ) or current_auth.scopes
                 auth = AuthConfig(
-                    enabled=request.form.get("auth_enabled") == "on",
+                    enabled=auth_enabled,
                     tenant_id=request.form.get("auth_tenant_id", "").strip() or None,
                     client_id=request.form.get("auth_client_id", "").strip() or None,
                     client_secret=auth_client_secret,
                     redirect_uri=request.form.get("auth_redirect_uri", "").strip() or None,
                     allowed_groups=allowed_groups,
-                    scopes=scopes,
+                    scopes=current_auth.scopes,
                 )
 
                 updated = AppConfig(ldap=ldap, sync=sync, storage=storage, m365=m365, auth=auth)
@@ -428,7 +402,7 @@ def register_routes(app: Flask) -> None:
                     username = _derive_username(first_name, last_name)
                 email = _derive_email(username, email_domain) or request.form.get("email", "").strip()
                 role_name = request.form.get("job_role", "").strip()
-                password = request.form.get("password", "") or None
+                password = request.form.get("password", "").strip()
                 manager_search = request.form.get("manager_search", "").strip()
                 manager_dn = request.form.get("manager_dn") or None
                 chosen_ou = request.form.get("user_ou") or None
@@ -455,8 +429,11 @@ def register_routes(app: Flask) -> None:
                     )
                 selected_groups = assignable_groups
 
+                if not password:
+                    raise ValueError("Temporary password is required.")
+
                 if not all([first_name, last_name, username, email, role_name]):
-                    raise ValueError("All fields except password and attributes are required.")
+                    raise ValueError("All fields except attributes are required.")
 
                 role = roles.get(role_name)
                 if not role:
@@ -526,23 +503,13 @@ def register_routes(app: Flask) -> None:
                         default_manager_dn=effective_manager,
                         attributes=attributes,
                         groups=selected_groups,
-<<<<<<< HEAD
-                        license_sku_id=license_sku,
-                        disabled_service_plans=disabled_plans_form,
-=======
                         licenses=form_license_selections,
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
                     )
                     if seed_status == "created":
                         flash(f"Saved job role template '{role_name}' for future use.", "info")
                 except Exception as exc:  # pragma: no cover - persistence errors should not block onboarding
                     flash(f"User created but job role defaults could not be stored: {exc}", "warning")
 
-<<<<<<< HEAD
-                if license_sku:
-                    result["license_sku_id"] = license_sku
-                    result["disabled_service_plans"] = disabled_plans_form
-=======
                 principal_candidates: List[str] = []
                 primary_principal = _derive_email(username, email_domain)
                 preferred_principal = (primary_principal or email or "").strip()
@@ -565,16 +532,6 @@ def register_routes(app: Flask) -> None:
                             "Microsoft 365 license assignment queued; it will apply shortly.",
                             "info",
                         )
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
-
-                queued_license = _enqueue_license_job(
-                    app, config, email, license_sku, disabled_plans_form
-                )
-                if queued_license:
-                    flash(
-                        "Microsoft 365 license assignment queued; it will apply shortly.",
-                        "info",
-                    )
 
                 _trigger_sync(config)
                 flash(
@@ -1133,18 +1090,6 @@ def register_routes(app: Flask) -> None:
                             if entry.get("skuId")
                         ]
                         if assigned:
-<<<<<<< HEAD
-                            primary = assigned[0]
-                            template_license_selection = {
-                                "license_sku_id": primary.get("skuId"),
-                                "disabled_service_plans": list(
-                                    primary.get("disabledPlans") or []
-                                ),
-                                "assigned_count": len(assigned),
-                                "source_principal": graph_user.get("userPrincipalName")
-                                or lookup,
-                            }
-=======
                             licenses_payload: List[Dict[str, Any]] = []
                             for entry in assigned:
                                 try:
@@ -1170,7 +1115,6 @@ def register_routes(app: Flask) -> None:
                                     or lookup,
                                     "licenses": licenses_payload,
                                 }
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
             except M365ClientError as exc:
                 flash(
                     f"Unable to read Microsoft 365 licenses for the template user: {exc}",
@@ -1179,14 +1123,6 @@ def register_routes(app: Flask) -> None:
             except Exception as exc:
                 flash(f"Unexpected Microsoft 365 license error: {exc}", "warning")
 
-<<<<<<< HEAD
-        if not selected_license and template_license_selection:
-            selected_license = template_license_selection.get("license_sku_id") or ""
-        if not selected_disabled_plans and template_license_selection:
-            selected_disabled_plans = list(
-                template_license_selection.get("disabled_service_plans") or []
-            )
-=======
         if not selected_license_selections and template_license_selection:
             template_entries = template_license_selection.get("licenses") or []
             if template_entries:
@@ -1207,7 +1143,6 @@ def register_routes(app: Flask) -> None:
         primary_selection = selected_license_selections[0] if selected_license_selections else None
         selected_license = primary_selection.sku_id if primary_selection else ""
         selected_disabled_plans = list(primary_selection.disabled_plans) if primary_selection else []
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 
         template_manager_dn: Optional[str] = None
         template_manager_display: Optional[str] = None
@@ -1263,7 +1198,7 @@ def register_routes(app: Flask) -> None:
                     username = _derive_username(first_name, last_name)
                 role_name = request.form.get("job_role", "").strip()
                 email = _derive_email(username, email_domain) or request.form.get("email", "").strip()
-                password = request.form.get("password", "") or None
+                password = request.form.get("password", "").strip()
                 manager_search = request.form.get("manager_search", "").strip()
                 explicit_manager_dn = request.form.get("manager_dn") or None
                 chosen_ou = request.form.get("user_ou") or None
@@ -1273,10 +1208,6 @@ def register_routes(app: Flask) -> None:
                 office_name = request.form.get("office", "").strip()
                 attributes = _parse_attributes(request.form.get("attributes", ""))
                 selected_groups = _dedupe_preserve(request.form.getlist("groups"))
-                selected_license = (request.form.get("license_sku") or "").strip()
-                selected_disabled_plans = _dedupe_preserve(
-                    request.form.getlist("license_disabled_plan")
-                )
 
                 parsed_form_selections = _parse_license_selections(request.form.getlist("license_selection"))
                 legacy_license_sku = (request.form.get("license_sku") or "").strip()
@@ -1302,8 +1233,11 @@ def register_routes(app: Flask) -> None:
                 selected_license = primary_selection.sku_id if primary_selection else ""
                 selected_disabled_plans = list(primary_selection.disabled_plans) if primary_selection else []
 
+                if not password:
+                    raise ValueError("Temporary password is required.")
+
                 if not all([first_name, last_name, username, email, role_name]):
-                    raise ValueError("All fields except password and attributes are required.")
+                    raise ValueError("All fields except attributes are required.")
 
                 role = roles.get(role_name)
                 if not role:
@@ -1349,12 +1283,7 @@ def register_routes(app: Flask) -> None:
                     manager_dn=manager_dn,
                     attributes=attributes,
                     groups=selected_groups,
-<<<<<<< HEAD
-                    license_sku_id=selected_license or None,
-                    disabled_service_plans=selected_disabled_plans,
-=======
                     licenses=form_license_selections,
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
                 )
 
                 chosen_ou = chosen_ou or role.user_ou
@@ -1372,26 +1301,13 @@ def register_routes(app: Flask) -> None:
                         default_manager_dn=manager_dn,
                         attributes=attributes,
                         groups=selected_groups,
-<<<<<<< HEAD
-                        license_sku_id=selected_license or None,
-                        disabled_service_plans=selected_disabled_plans,
-=======
                         licenses=form_license_selections,
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
                     )
                     if seed_status == "created":
                         flash(f"Saved job role template '{role_name}' for future use.", "info")
                 except Exception as exc:  # pragma: no cover - persistence errors should not block cloning
                     flash(f"Account cloned but job role defaults could not be stored: {exc}", "warning")
 
-<<<<<<< HEAD
-                if selected_license:
-                    result["license_sku_id"] = selected_license
-                    result["disabled_service_plans"] = selected_disabled_plans
-                queued_license = _enqueue_license_job(
-                    app, config, email, selected_license, selected_disabled_plans
-                )
-=======
                 if primary_selection:
                     result["license_sku_id"] = primary_selection.sku_id
                     result["disabled_service_plans"] = list(primary_selection.disabled_plans)
@@ -1417,7 +1333,6 @@ def register_routes(app: Flask) -> None:
                         form_license_selections,
                         alternates=principal_candidates,
                     )
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
                 if queued_license:
                     flash(
                         "Microsoft 365 license assignment queued; it will apply shortly.",
@@ -1471,10 +1386,7 @@ def register_routes(app: Flask) -> None:
             role_license_defaults=role_license_defaults,
             selected_license=selected_license,
             selected_disabled_plans=selected_disabled_plans,
-<<<<<<< HEAD
-=======
             selected_license_selections=[selection.to_dict() for selection in selected_license_selections],
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
             template_license_selection=template_license_selection,
             m365_status=m365_status,
             job_roles=roles,
@@ -1544,80 +1456,6 @@ def _get_m365_client(app: Flask, config: AppConfig) -> Optional[M365Client]:
     return client
 
 
-def _build_msal_client(auth_config: AuthConfig) -> msal.ConfidentialClientApplication:
-    authority = f"https://login.microsoftonline.com/{auth_config.tenant_id or 'common'}"
-    return msal.ConfidentialClientApplication(
-        client_id=auth_config.client_id,
-        client_credential=auth_config.client_secret,
-        authority=authority,
-    )
-
-
-def _auth_redirect_uri(auth_config: AuthConfig) -> str:
-    if auth_config.redirect_uri:
-        return auth_config.redirect_uri
-    return urljoin(request.url_root, url_for("auth_callback").lstrip("/"))
-
-
-def _sanitize_scopes(scopes: Iterable[str]) -> List[str]:
-    requested = [scope.strip() for scope in scopes or _DEFAULT_AUTH_SCOPES if scope.strip()]
-    filtered = [scope for scope in requested if scope.lower() not in _RESERVED_AUTH_SCOPES]
-    if not filtered:
-        filtered = list(_DEFAULT_AUTH_SCOPES)
-    # Preserve order while removing duplicates
-    seen: set[str] = set()
-    result: List[str] = []
-    for scope in filtered:
-        if scope not in seen:
-            seen.add(scope)
-            result.append(scope)
-    return result
-
-
-def _extract_user_groups(
-    claims: Dict[str, Any],
-    token_result: Dict[str, Any],
-    logger: Any,
-) -> set[str]:
-    token_groups = set(claims.get("groups") or [])
-    if token_groups:
-        logger.debug("Token already contained %d group(s).", len(token_groups))
-        return token_groups
-
-    claim_names = claims.get("_claim_names") or {}
-    if "groups" not in claim_names:
-        return set()
-
-    access_token = token_result.get("access_token")
-    if not access_token:
-        logger.warning("No access token present; unable to query memberOf.")
-        return set()
-
-    try:
-        fetched = _fetch_member_groups(access_token)
-        logger.debug("Fetched %d group(s) via Graph fallback: %s", len(fetched), ", ".join(fetched))
-        return fetched
-    except Exception as exc:  # pragma: no cover
-        logger.warning("Unable to fetch group membership from Graph: %s", exc)
-        return set()
-
-
-def _fetch_member_groups(access_token: str) -> set[str]:
-    url = "https://graph.microsoft.com/v1.0/me/memberOf?$select=id"
-    headers = {"Authorization": f"Bearer {access_token}"}
-    groups: set[str] = set()
-    while url:
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        payload = response.json()
-        for entry in payload.get("value", []):
-            group_id = entry.get("id")
-            if group_id:
-                groups.add(group_id)
-        url = payload.get("@odata.nextLink")
-    return groups
-
-
 def _build_m365_status(app: Flask, config: AppConfig) -> Dict[str, Any]:
     m365_config = getattr(config, "m365", M365Config())
     status: Dict[str, Any] = {
@@ -1663,6 +1501,12 @@ def _build_m365_status(app: Flask, config: AppConfig) -> Dict[str, Any]:
 
 
 def _load_app_config(app: Flask) -> AppConfig:
+    if has_request_context():
+        cached = getattr(g, "_app_config", None)
+        if cached is None:
+            cached = load_config(app.config.get("CONFIG_PATH"))
+            g._app_config = cached
+        return cached
     return load_config(app.config.get("CONFIG_PATH"))
 
 
@@ -1725,6 +1569,60 @@ def _parse_attributes(raw: str) -> Dict[str, Any]:
         key, value = stripped.split("=", 1)
         attributes[key.strip()] = value.strip()
     return attributes
+
+
+def _build_msal_client(auth_config: AuthConfig) -> msal.ConfidentialClientApplication:
+    authority = f"https://login.microsoftonline.com/{auth_config.tenant_id or 'common'}"
+    return msal.ConfidentialClientApplication(
+        client_id=auth_config.client_id,
+        client_credential=auth_config.client_secret,
+        authority=authority,
+    )
+
+
+def _auth_redirect_uri(auth_config: AuthConfig) -> str:
+    if auth_config.redirect_uri:
+        return auth_config.redirect_uri
+    base = request.url_root.rstrip("/")
+    return f"{base}{url_for('auth_callback')}"
+
+
+def _extract_user_groups(
+    claims: Dict[str, Any],
+    token_result: Dict[str, Any],
+    logger: Any,
+) -> set[str]:
+    groups = set(claims.get("groups") or [])
+    if groups:
+        return groups
+
+    claim_names = claims.get("_claim_names") or {}
+    if claim_names.get("groups"):
+        access_token = token_result.get("access_token")
+        if access_token:
+            try:
+                return _fetch_member_groups(access_token)
+            except Exception as exc:  # pragma: no cover - defensive logging
+                logger.warning("Unable to fetch group membership from Graph: %s", exc)
+    return groups
+
+
+def _fetch_member_groups(access_token: str) -> set[str]:
+    endpoint = "https://graph.microsoft.com/v1.0/me/memberOf?$select=id"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    groups: set[str] = set()
+    url = endpoint
+    while url:
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code != 200:
+            break
+        payload = response.json()
+        for entry in payload.get("value", []):
+            group_id = entry.get("id")
+            if group_id:
+                groups.add(group_id)
+        url = payload.get("@odata.nextLink")
+    return groups
 
 
 def _format_attributes(user: Optional[Dict[str, Any]]) -> str:
@@ -1972,12 +1870,7 @@ def _auto_seed_job_role(
     default_manager_dn: Optional[str],
     attributes: Dict[str, Any],
     groups: Iterable[str],
-<<<<<<< HEAD
-    license_sku_id: Optional[str],
-    disabled_service_plans: Iterable[str],
-=======
     licenses: Iterable[LicenseSelection],
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 ) -> Optional[str]:
     """Persist a job role template based on the submitted onboarding data."""
 
@@ -1988,12 +1881,7 @@ def _auto_seed_job_role(
     role_ou = (user_ou or "").strip() or (config.ldap.user_ou or None)
     role_manager = (default_manager_dn or "").strip() or None
     role_groups = _dedupe_preserve(groups or [])
-<<<<<<< HEAD
-    role_license = (license_sku_id or "").strip() or None
-    role_disabled_plans = _dedupe_preserve(disabled_service_plans or [])
-=======
     role_licenses = _merge_license_selections(licenses or [])
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
     role_attributes = _extract_role_attribute_defaults(normalized_name, attributes or {})
 
     existing = roles.get(normalized_name)
@@ -2008,12 +1896,7 @@ def _auto_seed_job_role(
             default_manager_dn=role_manager,
             attributes=role_attributes,
             groups=role_groups,
-<<<<<<< HEAD
-            license_sku_id=role_license,
-            disabled_service_plans=role_disabled_plans if role_license else [],
-=======
             licenses=role_licenses,
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
         )
         created = True
         changed = True
@@ -2025,14 +1908,8 @@ def _auto_seed_job_role(
             updates["default_manager_dn"] = role_manager
         if role_groups and not existing.groups:
             updates["groups"] = role_groups
-<<<<<<< HEAD
-        if role_license and not existing.license_sku_id:
-            updates["license_sku_id"] = role_license
-            updates["disabled_service_plans"] = role_disabled_plans
-=======
         if role_licenses and not existing.licenses:
             updates["licenses"] = role_licenses
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
         merged_attributes = dict(existing.attributes)
         attr_changed = False
         for key, value in role_attributes.items():
@@ -2092,21 +1969,14 @@ def _license_worker_loop(app: Flask) -> None:
                 if not client:
                     continue
                 for job in pending_jobs:
-<<<<<<< HEAD
-                    _process_license_job(app, store, client, job)
-=======
                     _process_license_job(app, config, store, client, job)
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
         except Exception as exc:  # pragma: no cover - worker resilience
             app.logger.exception("License worker encountered an error: %s", exc)
 
 
 def _process_license_job(
     app: Flask,
-<<<<<<< HEAD
-=======
     config: AppConfig,
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
     store: LicenseJobStore,
     client: M365Client,
     job: LicenseJob,
@@ -2114,26 +1984,6 @@ def _process_license_job(
     retry_index = min(job.attempts, len(_LICENSE_RETRY_SCHEDULE) - 1)
     retry_delay = timedelta(seconds=_LICENSE_RETRY_SCHEDULE[retry_index])
 
-<<<<<<< HEAD
-    lookup = job.principal
-    try:
-        graph_user = client.find_user(lookup, select="id,userPrincipalName")
-    except M365ClientError as exc:
-        store.defer_job(job.id, retry_delay, str(exc))
-        app.logger.warning("Microsoft 365 lookup failed for %s: %s", lookup, exc)
-        return
-    except Exception as exc:
-        store.defer_job(job.id, retry_delay, str(exc))
-        app.logger.exception("Unexpected error looking up %s: %s", lookup, exc)
-        return
-
-    if not graph_user or not graph_user.get("id"):
-        store.defer_job(job.id, retry_delay, "User not yet available in Microsoft 365.")
-        app.logger.info("License assignment deferred for %s; user not found.", lookup)
-        return
-
-    user_id = graph_user["id"]
-=======
     lookup_candidates = [job.principal] + [candidate for candidate in job.principal_candidates if candidate]
     graph_user: Optional[Dict[str, Any]] = None
     chosen_lookup: Optional[str] = None
@@ -2211,7 +2061,6 @@ def _process_license_job(
             )
             return
 
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
     try:
         client.assign_license(user_id, job.sku_id, job.disabled_plans)
     except M365ClientError as exc:
@@ -2240,10 +2089,7 @@ def _enqueue_license_job(
     principal: Optional[str],
     sku_id: Optional[str],
     disabled_plans: Iterable[str],
-<<<<<<< HEAD
-=======
     alternates: Optional[Iterable[str]] = None,
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 ) -> bool:
     if not principal or not sku_id:
         return False
@@ -2259,10 +2105,7 @@ def _enqueue_license_job(
             principal=principal,
             sku_id=sku_id,
             disabled_plans=disabled_plans,
-<<<<<<< HEAD
-=======
             alternates=alternates or [],
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
             delay_seconds=_LICENSE_INITIAL_DELAY_SECONDS,
         )
         app.logger.info("Queued Microsoft 365 license assignment for %s (%s).", principal, sku_id)
@@ -2272,8 +2115,6 @@ def _enqueue_license_job(
         return False
 
 
-<<<<<<< HEAD
-=======
 def _enqueue_license_jobs(
     app: Flask,
     config: AppConfig,
@@ -2295,7 +2136,6 @@ def _enqueue_license_jobs(
     return queued_any
 
 
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
 def _trigger_sync(config: AppConfig) -> None:
     try:
         run_sync_command(config.sync)
