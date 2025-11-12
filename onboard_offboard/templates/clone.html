@@ -1386,7 +1386,11 @@
           window.setTimeout(clearGroupResults, 150);
         });
 
-        applyRoleGroupsWithLicense(true);
+        if (!initialGroups.length) {
+          applyRoleGroupsWithLicense(true);
+        } else if (!licenseManuallyEdited) {
+          applyRoleLicenseDefaults(true);
+        }
 
         const domain = {{ (email_domain or '')|tojson }};
         const emailInput = document.getElementById("email");
