@@ -1,90 +1,38 @@
-# Copy this file to `config/settings.yaml` and update the values to match your environment.
 ldap:
-  server_uri: mock://demo
-  user_dn: CN=svc_onboarding,OU=Service Accounts,DC=example,DC=com
-  # Store real passwords in environment variables or a secrets manager. Do NOT commit secrets.
+  server_uri: ldaps://dc01.example.com
+  user_dn: CN=svc_onboarding,CN=Users,DC=example,DC=com
   password: "${ONBOARD_LDAP_PASSWORD:-change-me}"
   base_dn: DC=example,DC=com
-  user_ou: OU=Employees,DC=example,DC=com
+  user_ou: CN=Users,DC=example,DC=com
   use_ssl: true
-  manager_search_filter: "(&(objectClass=user)(|(title=Manager)(title=Director)))"
+  manager_search_filter: (&(objectClass=user)(|(title=Manager)(title=Director)))
   manager_attributes:
-    - displayName
-    - mail
-    - title
-  mock_data_file: data/mock_directory.yaml
-
+  - displayName
+  - mail
+  - title
+  group_search_base: OU=User Groups,DC=example,DC=com
 sync:
-  command: echo "Simulated directory sync"
+  command: echo "Invoke your directory sync tooling here"
   shell: true
   timeout: 180
-
 storage:
-  job_roles_file: data/job_roles.yaml
-  license_jobs_file: data/license_jobs.json
-
+  job_roles_file: data\job_roles.yaml
+  license_jobs_file: data\license_jobs.json
 m365:
-  tenant_id: ""
-  client_id: ""
-  # Leave client_secret blank in the repo; use environment variables in production.
-  client_secret: ""
-  sku_cache_file: data/m365_skus.json
+  tenant_id: 00000000-0000-0000-0000-000000000000
+  client_id: 00000000-0000-0000-0000-000000000000
+  client_secret: "${ONBOARD_M365_CLIENT_SECRET:-change-me}"
+  sku_cache_file: data\m365_skus.json
   cache_ttl_minutes: 720
-  default_usage_location: ""
-
+  default_usage_location: ''
 auth:
   enabled: false
-  tenant_id: ""
-  client_id: ""
-  client_secret: ""
-  redirect_uri: "http://localhost:5000/auth/callback"
-  allowed_groups: []
+  tenant_id: 00000000-0000-0000-0000-000000000000
+  client_id: 00000000-0000-0000-0000-000000000000
+  client_secret: "${ONBOARD_AUTH_CLIENT_SECRET:-change-me}"
+  redirect_uri: https://portal.example.com/auth/callback
+  allowed_groups:
+  - 00000000-0000-0000-0000-000000000000
   scopes:
-    - https://graph.microsoft.com/User.Read
-    - https://graph.microsoft.com/GroupMember.Read.All
-
-# Copy this file to `config/settings.yaml` and update the values to match your environment.
-ldap:
-  server_uri: mock://demo
-  user_dn: CN=svc_onboarding,OU=Service Accounts,DC=example,DC=com
-  # Store real passwords in environment variables or a secrets manager. Do NOT commit secrets.
-  password: "${ONBOARD_LDAP_PASSWORD:-change-me}"
-  base_dn: DC=example,DC=com
-  user_ou: OU=Employees,DC=example,DC=com
-  use_ssl: true
-  manager_search_filter: "(&(objectClass=user)(|(title=Manager)(title=Director)))"
-  manager_attributes:
-    - displayName
-    - mail
-    - title
-  mock_data_file: data/mock_directory.yaml
-
-sync:
-  command: echo "Simulated directory sync"
-  shell: true
-  timeout: 180
-
-storage:
-  job_roles_file: data/job_roles.yaml
-  license_jobs_file: data/license_jobs.json
-
-m365:
-  tenant_id: ""
-  client_id: ""
-  # Leave client_secret blank in the repo; use environment variables in production.
-  client_secret: ""
-  sku_cache_file: data/m365_skus.json
-  cache_ttl_minutes: 720
-  default_usage_location: ""
-
-auth:
-  enabled: false
-  tenant_id: ""
-  client_id: ""
-  client_secret: ""
-  redirect_uri: "http://localhost:5000/auth/callback"
-  allowed_groups: []
-  scopes:
-    - https://graph.microsoft.com/User.Read
-    - https://graph.microsoft.com/GroupMember.Read.All
-
+  - https://graph.microsoft.com/User.Read
+  - https://graph.microsoft.com/GroupMember.Read.All

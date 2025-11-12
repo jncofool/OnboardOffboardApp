@@ -1,16 +1,16 @@
 roles:
 - name: IT Services Manager
   description: null
-  user_ou: CN=Users,DC=amanomcgann,DC=com
-  default_manager_dn: CN=Mark Daneshvar,CN=Users,DC=amanomcgann,DC=com
+  user_ou: CN=Users,DC=example,DC=com
+  default_manager_dn: CN=Alex Manager,CN=Users,DC=example,DC=com
   attributes:
-    company: Amano McGann Inc
-    physicalDeliveryOfficeName: AMI Corporate
+    company: Example Corp
+    physicalDeliveryOfficeName: HQ
     title: IT Services Manager
   groups:
-  - CN=SG-DEPT-QA,OU=User Groups,DC=amanomcgann,DC=com
-  - CN=SG-DEPT-HW,OU=User Groups,DC=amanomcgann,DC=com
-  - CN=SG-DEPT-HCL,OU=User Groups,DC=amanomcgann,DC=com
-  license_sku_id: 05e9a617-0261-4cee-bb44-138d3ef5d965
+  - CN=SG-DEPT-QA,OU=User Groups,DC=example,DC=com
+  - CN=SG-DEPT-HW,OU=User Groups,DC=example,DC=com
+  - CN=SG-DEPT-HCL,OU=User Groups,DC=example,DC=com
+  license_sku_id: 00000000-0000-0000-0000-000000000000
   disabled_service_plans:
-  - 31b4e2fc-4cd6-4e7d-9c1b-41407303bd66
+  - 00000000-0000-0000-0000-000000000000

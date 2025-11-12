@@ -29,14 +29,14 @@ groups:
   distinguished_name: CN=Corporate HQ,OU=Groups,DC=example,DC=com
   description: Corporate office staff group.
 users:
-- distinguished_name: CN=Mark Daneshvar,Amano Mcgann
+- distinguished_name: CN=Casey Morgan,DC=example,DC=com
   attributes:
-    givenName: Mark
-    sn: Daneshvar
-    displayName: Mark Daneshvar
-    userPrincipalName: mark.daneshvar@example.com
-    sAMAccountName: mark.daneshvar
-    mail: mark.daneshvar@example.com
+    givenName: Casey
+    sn: Morgan
+    displayName: Casey Morgan
+    userPrincipalName: casey.morgan@example.com
+    sAMAccountName: casey.morgan
+    mail: casey.morgan@example.com
     title: Field Service Technician
     department: Field Services
     telephoneNumber: '16512109176'
