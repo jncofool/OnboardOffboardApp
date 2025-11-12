@@ -459,11 +459,10 @@ def register_routes(app: Flask) -> None:
                     )
                 selected_groups = assignable_groups
 
-                if not password:
-                    raise ValueError("Temporary password is required.")
-
                 if not all([first_name, last_name, username, email, role_name]):
                     raise ValueError("All fields except attributes are required.")
+                if not password:
+                    raise ValueError("A temporary password is required.")
 
                 role = roles.get(role_name)
                 if not role:
@@ -1263,11 +1262,10 @@ def register_routes(app: Flask) -> None:
                 selected_license = primary_selection.sku_id if primary_selection else ""
                 selected_disabled_plans = list(primary_selection.disabled_plans) if primary_selection else []
 
-                if not password:
-                    raise ValueError("Temporary password is required.")
-
                 if not all([first_name, last_name, username, email, role_name]):
                     raise ValueError("All fields except attributes are required.")
+                if not password:
+                    raise ValueError("A temporary password is required.")
 
                 role = roles.get(role_name)
                 if not role:

@@ -91,7 +91,11 @@
       <div class="hint">
         Role defaults are added automatically. Search to include additional groups or remove tags to exclude them.
       </div>
-      <div id="group_hidden_inputs"></div>
+      <div id="group_hidden_inputs">
+        {% for group in selected_groups %}
+          <input type="hidden" name="groups" value="{{ group }}" />
+        {% endfor %}
+      </div>
     </div>
     {% if m365_status.configured %}
       <div class="field" id="license_field">
@@ -118,8 +122,8 @@
       </div>
     {% endif %}
     <div class="field">
-      <label for="password">Temporary Password (optional)</label>
-      <input id="password" name="password" type="password" />
+      <label for="password">Temporary Password</label>
+      <input id="password" name="password" type="password" required />
     </div>
     <div class="field">
       <label for="manager_search">Manager</label>
