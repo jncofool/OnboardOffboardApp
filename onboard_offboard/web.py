@@ -208,6 +208,12 @@ def register_routes(app: Flask) -> None:
         client = _build_msal_client(config.auth)
         redirect_uri = _auth_redirect_uri(config.auth)
         token_scopes = list(config.auth.scopes or _DEFAULT_AUTH_SCOPES)
+        app.logger.info(
+            "Auth callback: exchanging authorization code for scopes=%s redirect_uri=%s state=%s",
+            token_scopes,
+            redirect_uri,
+            expected_state,
+        )
         token_result = client.acquire_token_by_authorization_code(
             code,
             scopes=token_scopes,
@@ -215,13 +221,37 @@ def register_routes(app: Flask) -> None:
         )
         if "access_token" not in token_result:
             message = token_result.get("error_description") or "Unable to complete sign-in."
+            app.logger.error(
+                "Auth callback: token acquisition failed (error=%s, error_description=%s, correlation_id=%s)",
+                token_result.get("error"),
+                token_result.get("error_description"),
+                token_result.get("correlation_id"),
+            )
             flash(message, "error")
             return redirect(url_for("login"))
 
         claims = token_result.get("id_token_claims") or {}
+        subject = claims.get("preferred_username") or claims.get("oid") or "unknown"
         allowed_groups = set(config.auth.allowed_groups or [])
+        app.logger.info(
+            "Auth callback: allowed group ids=%s",
+            sorted(allowed_groups) if allowed_groups else [],
+        )
         user_groups = _extract_user_groups(claims, token_result, app.logger)
+        app.logger.info(
+            "Auth callback: user=%s oid=%s resolved_groups=%s",
+            subject,
+            claims.get("oid"),
+            sorted(user_groups),
+        )
         if allowed_groups and user_groups.isdisjoint(allowed_groups):
+            app.logger.warning(
+                "Auth callback: denying user=%s oid=%s (required groups=%s, resolved_groups=%s)",
+                subject,
+                claims.get("oid"),
+                sorted(allowed_groups),
+                sorted(user_groups),
+            )
             flash("You do not have access to this application.", "error")
             return redirect(url_for("login"))
 
@@ -1594,6 +1624,7 @@ def _extract_user_groups(
 ) -> set[str]:
     groups = set(claims.get("groups") or [])
     if groups:
+        logger.info("Auth groups: using %s identifiers from ID token claim.", len(groups))
         return groups
 
     claim_names = claims.get("_claim_names") or {}
@@ -1601,20 +1632,40 @@ def _extract_user_groups(
         access_token = token_result.get("access_token")
         if access_token:
             try:
-                return _fetch_member_groups(access_token)
+                logger.info(
+                    "Auth groups: token contained overage reference; fetching from Graph for oid=%s",
+                    claims.get("oid"),
+                )
+                fetched = _fetch_member_groups(access_token, logger)
+                logger.info(
+                    "Auth groups: Graph lookup for oid=%s returned %s groups.",
+                    claims.get("oid"),
+                    len(fetched),
+                )
+                return fetched
             except Exception as exc:  # pragma: no cover - defensive logging
                 logger.warning("Unable to fetch group membership from Graph: %s", exc)
+        else:
+            logger.warning("Auth groups: groups claim present but no access token available.")
+    else:
+        logger.info("Auth groups: no groups claim or overage reference found in ID token.")
     return groups
 
 
-def _fetch_member_groups(access_token: str) -> set[str]:
+def _fetch_member_groups(access_token: str, logger: Any) -> set[str]:
     endpoint = "https://graph.microsoft.com/v1.0/me/memberOf?$select=id"
     headers = {"Authorization": f"Bearer {access_token}"}
     groups: set[str] = set()
     url = endpoint
     while url:
+        logger.info("Auth groups: calling Graph memberOf endpoint url=%s", url)
         response = requests.get(url, headers=headers, timeout=10)
         if response.status_code != 200:
+            logger.warning(
+                "Auth groups: Graph memberOf request failed (status=%s body=%s)",
+                response.status_code,
+                response.text,
+            )
             break
         payload = response.json()
         for entry in payload.get("value", []):
@@ -1622,6 +1673,7 @@ def _fetch_member_groups(access_token: str) -> set[str]:
             if group_id:
                 groups.add(group_id)
         url = payload.get("@odata.nextLink")
+    logger.info("Auth groups: Graph memberOf returned %s unique groups.", len(groups))
     return groups
 
 

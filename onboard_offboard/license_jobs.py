@@ -33,10 +33,7 @@ class LicenseJob:
     id: str
     principal: str
     sku_id: str
-<<<<<<< HEAD
-=======
     principal_candidates: List[str] = field(default_factory=list)
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
     disabled_plans: List[str] = field(default_factory=list)
     status: str = "pending"  # pending, completed, failed
     attempts: int = 0
@@ -51,10 +48,7 @@ class LicenseJob:
             "id": self.id,
             "principal": self.principal,
             "sku_id": self.sku_id,
-<<<<<<< HEAD
-=======
             "principal_candidates": list(self.principal_candidates),
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
             "disabled_plans": list(self.disabled_plans),
             "status": self.status,
             "attempts": self.attempts,
@@ -71,10 +65,7 @@ class LicenseJob:
             id=str(data.get("id") or uuid.uuid4()),
             principal=str(data["principal"]),
             sku_id=str(data["sku_id"]),
-<<<<<<< HEAD
-=======
             principal_candidates=list(data.get("principal_candidates") or []),
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
             disabled_plans=list(data.get("disabled_plans") or []),
             status=str(data.get("status") or "pending"),
             attempts=int(data.get("attempts") or 0),
@@ -134,11 +125,6 @@ class LicenseJobStore:
         principal: str,
         sku_id: str,
         disabled_plans: Iterable[str],
-<<<<<<< HEAD
-        delay_seconds: int = 0,
-    ) -> LicenseJob:
-        with self._lock:
-=======
         alternates: Iterable[str] = (),
         delay_seconds: int = 0,
     ) -> LicenseJob:
@@ -154,15 +140,11 @@ class LicenseJobStore:
                     continue
                 seen_lower.add(lowered)
                 candidate_set.append(cleaned)
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
             job = LicenseJob(
                 id=str(uuid.uuid4()),
                 principal=principal,
                 sku_id=sku_id,
-<<<<<<< HEAD
-=======
                 principal_candidates=candidate_set,
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
                 disabled_plans=list(disabled_plans or []),
             )
             if delay_seconds > 0:

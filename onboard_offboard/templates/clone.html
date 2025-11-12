@@ -131,64 +131,32 @@
         <div id="group_hidden_inputs"></div>
       </div>
       {% if m365_status.configured %}
-<<<<<<< HEAD
         <div class="field" id="license_field">
-          <label for="license_sku">Microsoft 365 License</label>
-          <select id="license_sku" name="license_sku">
-            <option value="">Do not assign a license</option>
-          </select>
+          <label>Microsoft 365 Licenses</label>
+          <div id="license_catalog" class="license-catalog"></div>
+          <div class="hint">
+            Choose one or more licenses to assign to the cloned user. Toggle individual apps under each license to fine-tune access.
+          </div>
           <div class="field-actions">
             {% if template_license_selection %}
               <button type="button" class="inline-button" id="apply_template_license">Use template license</button>
             {% endif %}
-            <button type="button" class="inline-button" id="apply_role_license">Use role default</button>
-            <button type="button" class="inline-button" id="clear_license">Clear license</button>
+            <button type="button" class="inline-button" id="apply_role_license">Use role defaults</button>
+            <button type="button" class="inline-button" id="clear_license">Clear all</button>
           </div>
           <small id="license_status_message" class="hint"></small>
+          <div id="license_hidden_inputs"></div>
           {% if template_license_selection and template_license_selection.assigned_count|int > 1 %}
             <small class="hint">
-              Template user has multiple licenses; the first assignment is preselected.
+              Template user has multiple licenses; use "Use template license" to mirror their current assignments.
             </small>
           {% endif %}
-        </div>
-        <div class="field" id="service_plan_field" hidden>
-          <label>Apps</label>
-          <div id="license_plan_list" class="checkbox-grid"></div>
-          <div id="license_hidden_inputs"></div>
         </div>
       {% else %}
         <div class="status-card">
           <span class="badge">Not Configured</span>
           <p>
             Microsoft 365 credentials have not been configured. Add them on the Configuration page to manage licenses during cloning.
-=======
-      <div class="field" id="license_field">
-        <label>Microsoft 365 Licenses</label>
-        <div id="license_catalog" class="license-catalog"></div>
-        <div class="hint">
-          Choose one or more licenses to assign to the cloned user. Toggle individual apps under each license to fine-tune access.
-        </div>
-        <div class="field-actions">
-          {% if template_license_selection %}
-            <button type="button" class="inline-button" id="apply_template_license">Use template license</button>
-          {% endif %}
-          <button type="button" class="inline-button" id="apply_role_license">Use role defaults</button>
-          <button type="button" class="inline-button" id="clear_license">Clear all</button>
-        </div>
-        <small id="license_status_message" class="hint"></small>
-        <div id="license_hidden_inputs"></div>
-        {% if template_license_selection and template_license_selection.assigned_count|int > 1 %}
-          <small class="hint">
-            Template user has multiple licenses; use "Use template license" to mirror their current assignments.
-          </small>
-        {% endif %}
-      </div>
-    {% else %}
-      <div class="status-card">
-        <span class="badge">Not Configured</span>
-        <p>
-          Microsoft 365 credentials have not been configured. Add them on the Configuration page to manage licenses during cloning.
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
           </p>
         </div>
       {% endif %}
