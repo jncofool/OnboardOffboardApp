@@ -1207,14 +1207,13 @@ def register_routes(app: Flask) -> None:
         email_domain = _email_domain_from_config(config)
         if not selected_groups and template_groups:
             selected_groups = _dedupe_preserve(template_groups)
-            filtered_groups, skipped_defaults = _filter_assignable_groups(selected_groups, config)
+            _, skipped_defaults = _filter_assignable_groups(selected_groups, config)
             if skipped_defaults:
                 flash(
-                    "Skipped template groups outside the managed scope: "
+                    "Template user has groups outside the managed scope: "
                     + ", ".join(skipped_defaults),
                     "warning",
                 )
-            selected_groups = filtered_groups
 
         if request.method == "POST":
             try:
