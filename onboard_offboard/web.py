@@ -1093,6 +1093,11 @@ def register_routes(app: Flask) -> None:
                         ],
                     )
                     template_groups = client.get_user_groups(user_dn)
+                    app.logger.info(
+                        "Clone template groups loaded user_dn=%s group_count=%s",
+                        user_dn,
+                        len(template_groups or []),
+                    )
             except Exception as exc:
                 flash(f"Unable to load selected user: {exc}", "error")
 
@@ -1207,13 +1212,19 @@ def register_routes(app: Flask) -> None:
         email_domain = _email_domain_from_config(config)
         if not selected_groups and template_groups:
             selected_groups = _dedupe_preserve(template_groups)
-            _, skipped_defaults = _filter_assignable_groups(selected_groups, config)
+            selected_groups, skipped_defaults = _filter_assignable_groups(selected_groups, config)
             if skipped_defaults:
                 flash(
                     "Template user has groups outside the managed scope: "
                     + ", ".join(skipped_defaults),
                     "warning",
                 )
+            app.logger.info(
+                "Clone template group selection user_dn=%s selected_count=%s skipped_count=%s",
+                user_dn,
+                len(selected_groups),
+                len(skipped_defaults),
+            )
 
         if request.method == "POST":
             try:

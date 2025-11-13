@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2025-11-05T20:18:10.292656+00:00",
+  "fetched_at": "2025-11-13T20:54:28.458761+00:00",
   "skus": [
     {
       "id": "7c98eced-e44f-40c3-b38b-242eeaebde35_c5928f49-12ba-48f7-ada3-0d743a3601d5",
@@ -301,7 +301,7 @@
       "skuPartNumber": "FLOW_FREE",
       "capabilityStatus": "Enabled",
       "appliesTo": "User",
-      "consumedUnits": 165,
+      "consumedUnits": 164,
       "prepaidUnits": {
         "enabled": 10000,
         "suspended": 0,
@@ -690,7 +690,7 @@
       "skuPartNumber": "POWER_BI_STANDARD",
       "capabilityStatus": "Enabled",
       "appliesTo": "User",
-      "consumedUnits": 18,
+      "consumedUnits": 17,
       "prepaidUnits": {
         "enabled": 1000000,
         "suspended": 0,
@@ -771,7 +771,7 @@
       "skuPartNumber": "Microsoft_Teams_Phone_with_Pay_as_you_go_Calling_(country_zone_1_US)",
       "capabilityStatus": "Enabled",
       "appliesTo": "User",
-      "consumedUnits": 102,
+      "consumedUnits": 81,
       "prepaidUnits": {
         "enabled": 110,
         "suspended": 0,
@@ -868,7 +868,7 @@
       "skuPartNumber": "SPE_E3",
       "capabilityStatus": "Enabled",
       "appliesTo": "User",
-      "consumedUnits": 326,
+      "consumedUnits": 319,
       "prepaidUnits": {
         "enabled": 332,
         "suspended": 0,
@@ -1262,7 +1262,7 @@
       "skuPartNumber": "O365_BUSINESS_ESSENTIALS",
       "capabilityStatus": "Enabled",
       "appliesTo": "User",
-      "consumedUnits": 0,
+      "consumedUnits": 1,
       "prepaidUnits": {
         "enabled": 1,
         "suspended": 0,
@@ -1709,7 +1709,7 @@
       "skuPartNumber": "Microsoft_Teams_Audio_Conferencing_select_dial_out",
       "capabilityStatus": "Enabled",
       "appliesTo": "User",
-      "consumedUnits": 45,
+      "consumedUnits": 47,
       "prepaidUnits": {
         "enabled": 50,
         "suspended": 0,

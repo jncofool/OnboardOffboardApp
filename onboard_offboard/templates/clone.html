@@ -789,25 +789,8 @@
     };
 
         const jobRoleInput = document.getElementById("job_role");
-        const roleGroups = {{ role_groups|tojson }};
-        const initialGroups = {{ selected_groups|tojson }};
-<<<<<<< HEAD
-        const roleLicenseDefaults = {{ role_license_defaults|tojson }};
-        const initialLicenseSku = {{ selected_license|tojson }};
-        const initialDisabledPlans = {{ selected_disabled_plans|tojson }};
-        const templateLicense = {{ template_license_selection|tojson }};
-        const m365Status = {{ m365_status|tojson }};
-        const licenseSelect = document.getElementById("license_sku");
-        const licensePlanList = document.getElementById("license_plan_list");
-        const licenseHiddenInputs = document.getElementById("license_hidden_inputs");
-        const licenseStatusMessage = document.getElementById("license_status_message");
-        const licensePlanField = document.getElementById("service_plan_field");
-        const applyTemplateLicenseButton = document.getElementById("apply_template_license");
-        const applyRoleLicenseButton = document.getElementById("apply_role_license");
-        const clearLicenseButton = document.getElementById("clear_license");
-        let licensePicker = null;
-        let licenseManuallyEdited = Boolean(initialLicenseSku);
-=======
+        const roleGroups = {{ role_groups|tojson|safe }};
+        const initialGroups = {{ selected_groups|tojson|safe }};
         const licenseCatalog = document.getElementById("license_catalog");
         const licenseHiddenInputs = document.getElementById("license_hidden_inputs");
         const licenseStatusMessage = document.getElementById("license_status_message");
@@ -815,235 +798,17 @@
         const applyRoleLicenseButton = document.getElementById("apply_role_license");
         const clearLicenseButton = document.getElementById("clear_license");
         const applyRoleGroupsButton = document.getElementById("apply_role_groups");
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
         const groupTags = document.getElementById("group_tags");
         const groupSearchInput = document.getElementById("group_search");
         const groupResults = document.getElementById("group_results");
         const groupHiddenInputs = document.getElementById("group_hidden_inputs");
-        const templateLicense = {{ template_license_selection|tojson }};
-        const initialLicenseSelections = {{ selected_license_selections|default([], true)|tojson }};
-        const roleLicenseDefaults = {{ role_license_defaults|tojson }};
+        const templateLicense = {{ template_license_selection|tojson|safe }};
+        const initialLicenseSelections = {{ selected_license_selections|default([], true)|tojson|safe }};
+        const roleLicenseDefaults = {{ role_license_defaults|tojson|safe }};
         let licenseManuallyEdited = initialLicenseSelections.length > 0;
         let licenseManager = null;
 
-<<<<<<< HEAD
-        function createLicensePicker({
-          selectEl,
-          planContainer,
-          hiddenContainer,
-          statusEl,
-          planField,
-          onManualChange,
-        }) {
-          const skuMap = new Map();
-          let currentSku = "";
-          let disabledPlans = new Set();
 
-          const setStatus = (message) => {
-            if (statusEl) {
-              statusEl.textContent = message || "";
-            }
-          };
-
-          const syncHidden = () => {
-            if (!hiddenContainer) {
-              return;
-            }
-            hiddenContainer.innerHTML = "";
-            disabledPlans.forEach((planId) => {
-              if (!planId) {
-                return;
-              }
-              const input = document.createElement("input");
-              input.type = "hidden";
-              input.name = "license_disabled_plan";
-              input.value = planId;
-              hiddenContainer.appendChild(input);
-            });
-          };
-
-          const formatAvailability = (sku) => {
-            if (!sku) {
-              return "";
-            }
-            const enabled = Number(sku?.prepaidUnits?.enabled ?? 0);
-            const consumed = Number(sku?.consumedUnits ?? 0);
-            const available = Math.max(0, enabled - consumed);
-            const name = sku?.skuPartNumber || sku?.skuId || "License";
-            return `${name} – ${available} available (${enabled} purchased)`;
-          };
-
-          const renderPlans = () => {
-            if (!planContainer) {
-              return;
-            }
-            const field = planField || planContainer.closest(".field");
-            planContainer.innerHTML = "";
-            if (!currentSku || !skuMap.has(currentSku)) {
-              if (field) {
-                field.hidden = true;
-              }
-              syncHidden();
-              if (skuMap.size) {
-                setStatus("Select a license to customise apps.");
-              }
-              return;
-            }
-            const sku = skuMap.get(currentSku);
-            const plans = (sku?.servicePlans || []).filter((plan) => plan?.servicePlanId);
-            plans.sort((a, b) =>
-              (a.servicePlanName || "").localeCompare(b.servicePlanName || "")
-            );
-            if (field) {
-              field.hidden = plans.length === 0;
-            }
-            plans.forEach((plan) => {
-              const planId = String(plan.servicePlanId);
-              const wrapper = document.createElement("label");
-              wrapper.className = "checkbox-card";
-              const checkbox = document.createElement("input");
-              checkbox.type = "checkbox";
-              checkbox.value = planId;
-              checkbox.checked = !disabledPlans.has(planId);
-              checkbox.addEventListener("change", (event) => {
-                if (event.target.checked) {
-                  disabledPlans.delete(planId);
-                } else {
-                  disabledPlans.add(planId);
-                }
-                syncHidden();
-              });
-              const label = document.createElement("span");
-              label.className = "checkbox-card-label";
-              label.textContent = plan.servicePlanName || plan.servicePlanId;
-              const status = document.createElement("span");
-              status.className = "checkbox-card-status";
-              status.textContent =
-                plan.provisioningStatus && plan.provisioningStatus !== "Success"
-                  ? plan.provisioningStatus
-                  : "";
-
-              wrapper.appendChild(checkbox);
-              wrapper.appendChild(label);
-              if (status.textContent) {
-                wrapper.appendChild(status);
-              }
-              planContainer.appendChild(wrapper);
-            });
-            syncHidden();
-            setStatus(formatAvailability(sku));
-          };
-
-          const populateSelect = () => {
-            if (!selectEl) {
-              return;
-            }
-            selectEl.innerHTML = "";
-            const defaultOption = document.createElement("option");
-            defaultOption.value = "";
-            defaultOption.textContent = "Do not assign a license";
-            selectEl.appendChild(defaultOption);
-            const entries = Array.from(skuMap.values());
-            entries.sort((a, b) =>
-              (a.skuPartNumber || "").localeCompare(b.skuPartNumber || "")
-            );
-            entries.forEach((sku) => {
-              const option = document.createElement("option");
-              option.value = sku.skuId || sku.id;
-              option.textContent = formatAvailability(sku);
-              selectEl.appendChild(option);
-            });
-            if (!entries.length) {
-              setStatus("No licenses available. Refresh the catalog on the Configuration page.");
-            }
-          };
-
-          const setValue = (skuId, disabledList, { skipManual = false } = {}) => {
-            currentSku = skuId || "";
-            disabledPlans = new Set(disabledList || []);
-            if (selectEl) {
-              selectEl.value = currentSku;
-            }
-            if (!skipManual && onManualChange) {
-              onManualChange();
-            }
-            renderPlans();
-          };
-
-          const loadSkus = async () => {
-            if (!m365Status?.configured) {
-              setStatus("Licensing is not configured.");
-              return;
-            }
-            try {
-              const response = await fetch("/api/m365/skus", {
-                headers: { Accept: "application/json" },
-              });
-              const payload = await response.json();
-              if (!response.ok) {
-                throw new Error(payload.error || payload.message || "Unable to load license catalog.");
-              }
-              skuMap.clear();
-              (payload.items || []).forEach((sku) => {
-                if (!sku || !sku.skuId) {
-                  return;
-                }
-                skuMap.set(sku.skuId, sku);
-              });
-              populateSelect();
-              renderPlans();
-              if (!skuMap.size) {
-                setStatus("No licenses available. Refresh the catalog on the Configuration page.");
-              } else if (!currentSku) {
-                setStatus("Select a license to customise apps.");
-              }
-              return payload;
-            } catch (error) {
-              setStatus(error instanceof Error ? error.message : String(error));
-              throw error;
-            }
-          };
-
-          if (selectEl) {
-            selectEl.addEventListener("change", (event) => {
-              const value = event.target.value;
-              currentSku = value;
-              disabledPlans = new Set();
-              if (onManualChange) {
-                onManualChange();
-              }
-              renderPlans();
-            });
-          }
-
-          return {
-            loadSkus,
-            setValue: (skuId, disabledList, skipManual = false) =>
-              setValue(skuId, disabledList, { skipManual }),
-            getValue: () => ({
-              skuId: currentSku,
-              disabledPlans: Array.from(disabledPlans),
-            }),
-            getLabel: (skuId) => {
-              const sku = skuMap.get(skuId);
-              return sku ? sku.skuPartNumber || sku.skuId : skuId;
-            },
-          };
-        }
-
-        function applyRoleLicenseDefaults(force = false) {
-          if (!licensePicker || !jobRoleInput) {
-            return;
-          }
-          const roleName = jobRoleInput.value.trim();
-          if (!roleName) {
-            return;
-          }
-          const defaults = roleLicenseDefaults[roleName];
-          if (!defaults) {
-            if (force) {
-              licensePicker.setValue("", [], true);
-=======
         const templateSelectionArray = Array.isArray(templateLicense?.licenses) && templateLicense.licenses.length
           ? templateLicense.licenses
               .map((entry) => ({
@@ -1072,7 +837,6 @@
           if (!defaults.length) {
             if (force) {
               licenseManager.clear({ skipManual: true });
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
               licenseManuallyEdited = false;
             }
             return;
@@ -1080,43 +844,6 @@
           if (!force && licenseManuallyEdited) {
             return;
           }
-<<<<<<< HEAD
-          licensePicker.setValue(
-            defaults.license_sku_id || "",
-            defaults.disabled_service_plans || [],
-            true
-          );
-          licenseManuallyEdited = false;
-        }
-
-        function applyTemplateLicenseDefaults() {
-          if (!licensePicker || !templateLicense?.license_sku_id) {
-            return;
-          }
-          licensePicker.setValue(
-            templateLicense.license_sku_id,
-            templateLicense.disabled_service_plans || [],
-            true
-          );
-          licenseManuallyEdited = false;
-        }
-
-        function updateTemplateLicenseButton() {
-          if (!applyTemplateLicenseButton) {
-            return;
-          }
-          const hasTemplate = Boolean(templateLicense?.license_sku_id);
-          applyTemplateLicenseButton.disabled = !hasTemplate;
-        }
-
-        if (licenseSelect) {
-          licensePicker = createLicensePicker({
-            selectEl: licenseSelect,
-            planContainer: licensePlanList,
-            hiddenContainer: licenseHiddenInputs,
-            statusEl: licenseStatusMessage,
-            planField: licensePlanField,
-=======
           licenseManager.setSelections(defaults, { skipManual: true });
           licenseManuallyEdited = false;
         };
@@ -1135,19 +862,10 @@
             hiddenContainer: licenseHiddenInputs,
             statusEl: licenseStatusMessage,
             initialSelections: initialLicenseSelections,
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
             onManualChange: () => {
               licenseManuallyEdited = true;
             },
           });
-<<<<<<< HEAD
-          licensePicker
-            .loadSkus()
-            .then(() => {
-              if (initialLicenseSku) {
-                licensePicker.setValue(initialLicenseSku, initialDisabledPlans, true);
-              } else if (templateLicense?.license_sku_id) {
-=======
 
           licenseManager
             .loadSkus()
@@ -1156,41 +874,18 @@
                 licenseManager.setSelections(initialLicenseSelections, { skipManual: true });
                 licenseManuallyEdited = true;
               } else if (templateSelectionArray.length) {
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
                 applyTemplateLicenseDefaults();
               } else {
                 applyRoleLicenseDefaults(true);
               }
-<<<<<<< HEAD
-              updateTemplateLicenseButton();
-            })
-            .catch((error) => console.error(error));
-=======
             })
             .catch(() => {
               /* errors already surfaced via status message */
             });
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
         }
 
         applyTemplateLicenseButton?.addEventListener("click", () => {
           applyTemplateLicenseDefaults();
-<<<<<<< HEAD
-          licenseManuallyEdited = true;
-        });
-        applyRoleLicenseButton?.addEventListener("click", () => {
-          applyRoleLicenseDefaults(true);
-        });
-        clearLicenseButton?.addEventListener("click", () => {
-          if (!licensePicker) {
-            return;
-          }
-          licensePicker.setValue("", [], true);
-          licenseManuallyEdited = true;
-        });
-        updateTemplateLicenseButton();
-
-=======
         });
 
         applyRoleLicenseButton?.addEventListener("click", () => {
@@ -1204,13 +899,12 @@
         });
 
         clearLicenseButton?.addEventListener("click", () => {
-        if (!licenseManager) {
-          return;
-        }
-        licenseManager.clear();
-        licenseManuallyEdited = true;
-      });
->>>>>>> a19a8e30961c2a13928b25dd6d1a7f5bab9d820e
+          if (!licenseManager) {
+            return;
+          }
+          licenseManager.clear();
+          licenseManuallyEdited = true;
+        });
         const formatGroupLabel = (value, friendly) => {
           if (friendly) {
             return friendly;
@@ -1392,7 +1086,7 @@
           applyRoleLicenseDefaults(true);
         }
 
-        const domain = {{ (email_domain or '')|tojson }};
+        const domain = {{ (email_domain or '')|tojson|safe }};
         const emailInput = document.getElementById("email");
         const usernameInput = document.getElementById("username");
         const firstNameInput = document.getElementById("first_name");
@@ -1483,26 +1177,26 @@
           "job_role",
           "clone-job-role-suggestions",
           "/api/job-titles",
-          {{ job_titles|tojson }},
+          {{ job_titles|tojson|safe }},
           { minLength: 1, preload: true, limit: 500 }
         );
         wireDatalist(
           "user_ou",
           "clone-ou-suggestions",
           "/api/ous",
-          {{ ous|tojson }}
+          {{ ous|tojson|safe }}
         );
         wireDatalist(
           "company",
           "clone-company-suggestions",
           "/api/companies",
-          {{ companies|tojson }}
+          {{ companies|tojson|safe }}
         );
         wireDatalist(
           "office",
           "clone-office-suggestions",
           "/api/offices",
-          {{ offices|tojson }}
+          {{ offices|tojson|safe }}
         );
         wireManagerAutocomplete();
         applyPersonNameFormatting(firstNameInput);
