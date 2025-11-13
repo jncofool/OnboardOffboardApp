@@ -634,20 +634,29 @@ class ADClient:
             return self._mock_directory.get_user_groups(user_dn)
 
         assert self.connection is not None
-        base_dn = self.config.group_search_base or self.config.base_dn
         escaped_dn = self._escape_filter_value(user_dn)
         search_filter = f"(&(objectClass=group)(member={escaped_dn}))"
-        self.connection.search(
-            search_base=base_dn,
-            search_filter=search_filter,
-            search_scope=SUBTREE,
-            attributes=["distinguishedName"],
-            paged_size=500,
-        )
+        search_bases: List[str] = []
+        if self.config.group_search_base:
+            search_bases.append(self.config.group_search_base)
+        if self.config.base_dn and self.config.base_dn not in search_bases:
+            search_bases.append(self.config.base_dn)
         groups: List[str] = []
-        for entry in self.connection.entries or []:
-            groups.append(str(entry.entry_dn))
-        return groups
+        for base_dn in search_bases or [self.config.base_dn]:
+            if not base_dn:
+                continue
+            self.connection.search(
+                search_base=base_dn,
+                search_filter=search_filter,
+                search_scope=SUBTREE,
+                attributes=["distinguishedName"],
+                paged_size=500,
+            )
+            if self.connection.entries:
+                groups.extend(str(entry.entry_dn) for entry in self.connection.entries)
+            if groups:
+                break
+        return list(dict.fromkeys(groups))
 
     def add_user_to_groups(self, user_dn: str, groups: Iterable[str]) -> None:
         unique_groups = [group for group in dict.fromkeys(groups) if group]
