@@ -211,6 +211,38 @@ class M365Client:
         return self._request("PATCH", f"/users/{user_id}", json=payload)
 
     # ------------------------------------------------------------------ #
+    # Group helpers                                                      #
+    # ------------------------------------------------------------------ #
+    def list_groups(self, query: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        params = {"$select": "id,displayName,mailNickname,description,groupTypes"}
+        if query:
+            escaped = query.replace("'", "''")
+            params["$filter"] = f"startswith(displayName,'{escaped}') or startswith(mailNickname,'{escaped}')"
+        params["$top"] = str(limit)
+        result = self._request("GET", "/groups", params=params)
+        return result.get("value", [])
+
+    def add_user_to_group(self, user_id: str, group_id: str) -> None:
+        payload = {"@odata.id": f"{GRAPH_BASE_URL}/directoryObjects/{user_id}"}
+        self._request("POST", f"/groups/{group_id}/members/$ref", json=payload)
+
+    def remove_user_from_group(self, user_id: str, group_id: str) -> None:
+        self._request("DELETE", f"/groups/{group_id}/members/{user_id}/$ref")
+
+    def get_user_groups(self, user_id: str) -> List[str]:
+        """Get list of group IDs the user is a member of."""
+        result = self._request("GET", f"/users/{user_id}/memberOf", params={"$select": "id"})
+        return [group["id"] for group in result.get("value", []) if group.get("id")]
+
+    def get_group(self, group_id: str) -> Dict[str, Any]:
+        """Get group details by ID."""
+        return self._request(
+            "GET",
+            f"/groups/{group_id}",
+            params={"$select": "id,displayName,mailNickname,description,mailEnabled,securityEnabled,groupTypes,onPremisesSyncEnabled,membershipRule"},
+        )
+
+    # ------------------------------------------------------------------ #
     # Cache read/write helpers                                           #
     # ------------------------------------------------------------------ #
     def _read_catalog(self) -> Optional[Dict[str, Any]]:

@@ -975,6 +975,27 @@
         };
 
         setGroups(Array.isArray(initialGroups) ? initialGroups : []);
+        
+        const resolveGroupNames = async () => {
+          const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+          let updated = false;
+          for (const [value, data] of selectedGroupMap.entries()) {
+            if (guidPattern.test(value) && data.label === value) {
+              try {
+                const payload = await fetchJson("/api/groups", value, 1);
+                const item = (payload.items || [])[0];
+                if (item && item.id === value && item.name) {
+                  selectedGroupMap.set(value, { value, label: item.name });
+                  updated = true;
+                }
+              } catch (e) {
+                console.warn(`Failed to resolve group ${value}:`, e);
+              }
+            }
+          }
+          if (updated) renderGroups();
+        };
+        resolveGroupNames();
 
         const applyRoleGroups = () => {
           if (!jobRoleInput) {
@@ -1046,16 +1067,18 @@
               }
               groupResults.innerHTML = "";
               items.forEach((item) => {
-                const dn = item.distinguishedName;
-                if (!dn) {
+                const groupId = item.id || item.distinguishedName;
+                if (!groupId) {
                   return;
                 }
                 const div = document.createElement("div");
                 div.className = "autocomplete-item";
-                div.textContent = item.name || formatGroupLabel(dn);
+                const label = item.name || formatGroupLabel(groupId);
+                const badge = item.source === "azure" ? " [Azure]" : " [AD]";
+                div.textContent = label + badge;
                 div.addEventListener("mousedown", (event) => {
                   event.preventDefault();
-                  addGroup(dn, item.name || formatGroupLabel(dn));
+                  addGroup(groupId, label);
                   renderGroups();
                   if (groupSearchInput) {
                     groupSearchInput.value = "";

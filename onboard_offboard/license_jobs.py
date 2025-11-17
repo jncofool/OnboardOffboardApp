@@ -35,6 +35,7 @@ class LicenseJob:
     sku_id: str
     principal_candidates: List[str] = field(default_factory=list)
     disabled_plans: List[str] = field(default_factory=list)
+    azure_groups: List[str] = field(default_factory=list)
     status: str = "pending"  # pending, completed, failed
     attempts: int = 0
     created_at: datetime = field(default_factory=_utc_now)
@@ -50,6 +51,7 @@ class LicenseJob:
             "sku_id": self.sku_id,
             "principal_candidates": list(self.principal_candidates),
             "disabled_plans": list(self.disabled_plans),
+            "azure_groups": list(self.azure_groups),
             "status": self.status,
             "attempts": self.attempts,
             "created_at": self.created_at.isoformat(),
@@ -67,6 +69,7 @@ class LicenseJob:
             sku_id=str(data["sku_id"]),
             principal_candidates=list(data.get("principal_candidates") or []),
             disabled_plans=list(data.get("disabled_plans") or []),
+            azure_groups=list(data.get("azure_groups") or []),
             status=str(data.get("status") or "pending"),
             attempts=int(data.get("attempts") or 0),
             created_at=_parse_datetime(data.get("created_at")) or _utc_now(),
@@ -126,6 +129,7 @@ class LicenseJobStore:
         sku_id: str,
         disabled_plans: Iterable[str],
         alternates: Iterable[str] = (),
+        azure_groups: Iterable[str] = (),
         delay_seconds: int = 0,
     ) -> LicenseJob:
         with self._lock:
@@ -146,6 +150,7 @@ class LicenseJobStore:
                 sku_id=sku_id,
                 principal_candidates=candidate_set,
                 disabled_plans=list(disabled_plans or []),
+                azure_groups=list(azure_groups or []),
             )
             if delay_seconds > 0:
                 job.not_before = _utc_now() + timedelta(seconds=delay_seconds)

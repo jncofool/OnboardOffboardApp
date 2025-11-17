@@ -110,6 +110,7 @@
             placeholder="33a87ac0-5965-4a22-9f5b-e45dd48d5211"
             autocomplete="off"
           />
+          <div class="hint">Used for both Graph API and Exchange Online PowerShell.</div>
         </div>
         <div class="field">
           <label for="m365_client_secret">Client Secret</label>
@@ -121,6 +122,44 @@
             placeholder="{% if m365_status.has_secret %}Leave blank to keep existing secret{% else %}Paste generated secret{% endif %}"
             autocomplete="off"
           />
+        </div>
+        <div class="field">
+          <label for="m365_cert_thumbprint">Certificate Thumbprint (for Distribution Lists)</label>
+          <input
+            id="m365_cert_thumbprint"
+            name="m365_cert_thumbprint"
+            type="text"
+            value="{{ config.m365.cert_thumbprint or '' }}"
+            placeholder="124BF450D129E75E40B1DA1DA64122433637FF9E"
+            autocomplete="off"
+          />
+          <div class="hint">Required for Exchange Online PowerShell to manage Distribution Lists.</div>
+        </div>
+        <div class="field">
+          <label for="m365_exo_organization">Exchange Organization Domain</label>
+          <input
+            id="m365_exo_organization"
+            name="m365_exo_organization"
+            type="text"
+            value="{{ config.m365.exo_organization or '' }}"
+            placeholder="amanomcgann.com"
+            autocomplete="off"
+          />
+          <div class="hint">Your tenant's primary domain for Exchange Online.</div>
+        </div>
+        <div class="field">
+          <label for="m365_default_usage_location">Default Usage Location</label>
+          <input
+            id="m365_default_usage_location"
+            name="m365_default_usage_location"
+            type="text"
+            maxlength="2"
+            value="{{ config.m365.default_usage_location or '' }}"
+            placeholder="US"
+            autocomplete="off"
+            style="text-transform: uppercase;"
+          />
+          <div class="hint">Two-letter country/region code applied before assigning licenses (e.g., US, CA).</div>
         </div>
         <div class="field">
           <label for="m365_sku_cache_file">License Cache File</label>
@@ -140,20 +179,6 @@
             min="1"
             value="{{ config.m365.cache_ttl_minutes }}"
           />
-        </div>
-        <div class="field">
-          <label for="m365_default_usage_location">Default Usage Location</label>
-          <input
-            id="m365_default_usage_location"
-            name="m365_default_usage_location"
-            type="text"
-            maxlength="2"
-            value="{{ config.m365.default_usage_location or '' }}"
-            placeholder="US"
-            autocomplete="off"
-            style="text-transform: uppercase;"
-          />
-          <div class="hint">Two-letter country/region code applied before assigning licenses (e.g., US, CA).</div>
         </div>
       </div>
       <div class="status-card" id="m365_status_card">
@@ -738,7 +763,30 @@
           });
         }
 
-        return { add, set, get };
+        const resolveGroupNames = async () => {
+          const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+          const promises = [];
+          map.forEach(({ value, label }, key) => {
+            if (guidPattern.test(value) && value === label) {
+              promises.push(
+                fetchJson("/api/groups", value, 1)
+                  .then((payload) => {
+                    const item = (payload.items || [])[0];
+                    if (item && item.name) {
+                      map.set(key, { value, label: item.name });
+                    }
+                  })
+                  .catch(() => {})
+              );
+            }
+          });
+          if (promises.length > 0) {
+            await Promise.all(promises);
+            render();
+          }
+        };
+
+        return { add, set, get, resolveGroupNames };
       };
 
       const roleTableBody = document.getElementById("role_table_body");
@@ -1303,6 +1351,9 @@
         setManagerField(role.default_manager_dn, role.default_manager_dn);
         roleAttributesInput.value = formatAttributesTextarea(role.attributes);
         roleGroupPicker.set(role.groups || []);
+        if (roleGroupPicker.resolveGroupNames) {
+          roleGroupPicker.resolveGroupNames();
+        }
         if (roleLicenseManager) {
           roleLicenseManager.setSelections(role.licenses || [], { skipManual: true });
         }

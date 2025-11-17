@@ -907,6 +907,30 @@
 
       setGroups(initialGroups);
 
+      const resolveGroupNames = async () => {
+        const guidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const promises = [];
+        selectedGroupMap.forEach(({ value, label }, key) => {
+          if (guidPattern.test(value) && value === label) {
+            promises.push(
+              fetchJson("/api/groups", value, 1)
+                .then((payload) => {
+                  const item = (payload.items || [])[0];
+                  if (item && item.name) {
+                    selectedGroupMap.set(key, { value, label: item.name });
+                  }
+                })
+                .catch(() => {})
+            );
+          }
+        });
+        if (promises.length > 0) {
+          await Promise.all(promises);
+          renderGroups();
+        }
+      };
+      resolveGroupNames();
+
       const applyRoleGroups = () => {
         if (!jobRoleInput) {
           return;
@@ -929,6 +953,7 @@
         });
         if (changed) {
           renderGroups();
+          resolveGroupNames();
         }
         applyRoleLicenseDefaults();
       };
@@ -974,16 +999,18 @@
             }
             groupResults.innerHTML = "";
             items.forEach((item) => {
-              const dn = item.distinguishedName;
-              if (!dn) {
+              const groupId = item.id || item.distinguishedName;
+              if (!groupId) {
                 return;
               }
               const div = document.createElement("div");
               div.className = "autocomplete-item";
-              div.textContent = item.name || formatGroupLabel(dn);
+              const label = item.name || formatGroupLabel(groupId);
+              const badge = item.source === "azure" ? " [Azure]" : " [AD]";
+              div.textContent = label + badge;
               div.addEventListener("mousedown", (event) => {
                 event.preventDefault();
-                addGroup(dn, item.name || formatGroupLabel(dn));
+                addGroup(groupId, label);
                 renderGroups();
                 if (groupSearchInput) {
                   groupSearchInput.value = "";

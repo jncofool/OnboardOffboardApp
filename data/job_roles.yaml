@@ -1,16 +1,18 @@
 roles:
-- name: IT Services Manager
-  description: null
-  user_ou: CN=Users,DC=example,DC=com
-  default_manager_dn: CN=Alex Manager,CN=Users,DC=example,DC=com
+- name: Software Engineer
+  description: Development team member
+  user_ou: OU=Engineering,OU=Employees,DC=example,DC=com
+  default_manager_dn: CN=Engineering Manager,OU=Managers,DC=example,DC=com
   attributes:
+    title: Software Engineer
+    department: Engineering
     company: Example Corp
-    physicalDeliveryOfficeName: HQ
-    title: IT Services Manager
   groups:
-  - CN=SG-DEPT-QA,OU=User Groups,DC=example,DC=com
-  - CN=SG-DEPT-HW,OU=User Groups,DC=example,DC=com
-  - CN=SG-DEPT-HCL,OU=User Groups,DC=example,DC=com
-  license_sku_id: 00000000-0000-0000-0000-000000000000
-  disabled_service_plans:
-  - 00000000-0000-0000-0000-000000000000
+  - CN=SG-Developers,OU=Groups,DC=example,DC=com
+  - CN=SG-AllStaff,OU=Groups,DC=example,DC=com
+  - a1b2c3d4-e5f6-7890-abcd-ef1234567890
+  licenses:
+  - sku_id: 05e9a617-0261-4cee-bb44-138d3ef5d965
+    disabled_plans: []
+  license_sku_id: 05e9a617-0261-4cee-bb44-138d3ef5d965
+  disabled_service_plans: []

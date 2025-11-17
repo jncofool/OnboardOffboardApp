@@ -60,10 +60,16 @@ class M365Config:
     sku_cache_file: Path = field(default_factory=lambda: Path("data/m365_skus.json"))
     cache_ttl_minutes: int = 720  # 12 hours by default
     default_usage_location: Optional[str] = None
+    cert_thumbprint: Optional[str] = None
+    exo_organization: Optional[str] = None
 
     @property
     def has_credentials(self) -> bool:
         return bool(self.tenant_id and self.client_id and self.client_secret)
+    
+    @property
+    def has_exo_credentials(self) -> bool:
+        return bool(self.client_id and self.cert_thumbprint and self.exo_organization)
 
 
 @dataclass
@@ -290,6 +296,8 @@ def load_config(path: Optional[Path] = None) -> AppConfig:
         sku_cache_file=cache_path,
         cache_ttl_minutes=cache_ttl,
         default_usage_location=_optional_str(m365_section.get("default_usage_location")),
+        cert_thumbprint=_optional_str(m365_section.get("cert_thumbprint")),
+        exo_organization=_optional_str(m365_section.get("exo_organization")),
     )
 
     auth_section = config_dict.get("auth", {})
@@ -372,6 +380,8 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
             "sku_cache_file": str(config.m365.sku_cache_file),
             "cache_ttl_minutes": config.m365.cache_ttl_minutes,
             "default_usage_location": config.m365.default_usage_location or "",
+            "cert_thumbprint": config.m365.cert_thumbprint or "",
+            "exo_organization": config.m365.exo_organization or "",
         },
         "auth": {
             "enabled": config.auth.enabled,

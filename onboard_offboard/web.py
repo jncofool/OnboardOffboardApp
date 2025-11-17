@@ -5,6 +5,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import threading
 import time
 import unicodedata
@@ -57,7 +58,7 @@ _TEMPLATE_FOLDER = Path(__file__).resolve().parent / "templates"
 _DEFAULT_ATTRIBUTE_KEYS = ("title", "department", "company", "physicalDeliveryOfficeName", "employeeID")
 _LICENSE_WORKER_INTERVAL = 30
 _LICENSE_INITIAL_DELAY_SECONDS = 90
-_LICENSE_RETRY_SCHEDULE = (60, 120, 300, 600, 900)
+_LICENSE_RETRY_SCHEDULE = (30, 30, 60, 120, 300)
 _AUTH_EXEMPT_ENDPOINTS = {"login", "logout", "auth_callback", "static"}
 _DEFAULT_AUTH_SCOPES = ("https://graph.microsoft.com/User.Read",)
 _RESERVED_AUTH_SCOPES = {"openid", "profile", "offline_access"}
@@ -341,6 +342,11 @@ def register_routes(app: Flask) -> None:
                 else:
                     default_usage_location = current_m365.default_usage_location
 
+                cert_thumbprint_input = request.form.get("m365_cert_thumbprint", "").strip()
+                cert_thumbprint = cert_thumbprint_input or current_m365.cert_thumbprint
+                exo_org_input = request.form.get("m365_exo_organization", "").strip()
+                exo_organization = exo_org_input or current_m365.exo_organization
+
                 m365 = M365Config(
                     tenant_id=tenant_id,
                     client_id=client_id,
@@ -348,6 +354,8 @@ def register_routes(app: Flask) -> None:
                     sku_cache_file=cache_path,
                     cache_ttl_minutes=max(1, cache_ttl),
                     default_usage_location=default_usage_location,
+                    cert_thumbprint=cert_thumbprint,
+                    exo_organization=exo_organization,
                 )
 
                 auth_enabled = request.form.get("auth_enabled") == "on"
@@ -508,6 +516,15 @@ def register_routes(app: Flask) -> None:
                 selected_license_selections = form_license_selections
 
                 job_role = replace(role, user_ou=chosen_ou or role.user_ou)
+                ad_groups, azure_groups = _separate_groups(selected_groups)
+                app.logger.info(
+                    "Onboard: separated groups - selected_count=%s ad_count=%s azure_count=%s ad_groups=%s azure_groups=%s",
+                    len(selected_groups),
+                    len(ad_groups),
+                    len(azure_groups),
+                    ad_groups,
+                    azure_groups,
+                )
                 employee = Employee(
                     first_name=first_name,
                     last_name=last_name,
@@ -516,12 +533,21 @@ def register_routes(app: Flask) -> None:
                     job_role=role_name,
                     manager_dn=effective_manager,
                     attributes=attributes,
-                    groups=selected_groups,
+                    groups=ad_groups,
                     licenses=form_license_selections,
                 )
 
                 with ADClient(config.ldap) as client:
                     result = client.create_user(employee, job_role, password=password)
+
+                _trigger_sync(config)
+
+                all_assigned_groups = ad_groups + azure_groups
+                app.logger.info(
+                    "Onboard: groups will be assigned - ad_groups=%s azure_groups=%s",
+                    ad_groups,
+                    azure_groups,
+                )
 
                 try:
                     seed_status = _auto_seed_job_role(
@@ -531,7 +557,7 @@ def register_routes(app: Flask) -> None:
                         user_ou=job_role.user_ou or chosen_ou or config.ldap.user_ou,
                         default_manager_dn=effective_manager,
                         attributes=attributes,
-                        groups=selected_groups,
+                        groups=all_assigned_groups,
                         licenses=form_license_selections,
                     )
                     if seed_status == "created":
@@ -554,15 +580,22 @@ def register_routes(app: Flask) -> None:
 
                 if preferred_principal and form_license_selections:
                     queued_license = _enqueue_license_jobs(
-                        app, config, preferred_principal, form_license_selections, alternates=principal_candidates
+                        app, config, preferred_principal, form_license_selections, alternates=principal_candidates, azure_groups=azure_groups
                     )
                     if queued_license:
                         flash(
-                            "Microsoft 365 license assignment queued; it will apply shortly.",
+                            "Microsoft 365 license and group assignment queued; it will apply shortly.",
                             "info",
                         )
-
-                _trigger_sync(config)
+                elif azure_groups and preferred_principal:
+                    queued_groups = _enqueue_license_jobs(
+                        app, config, preferred_principal, [], alternates=principal_candidates, azure_groups=azure_groups
+                    )
+                    if queued_groups:
+                        flash(
+                            "Microsoft 365 group assignment queued; it will apply shortly.",
+                            "info",
+                        )
                 flash(
                     f"Provisioned {result.get('sAMAccountName')} in {result.get('distinguished_name')}.",
                     "success",
@@ -891,7 +924,9 @@ def register_routes(app: Flask) -> None:
 
         items: List[Dict[str, Any]] = []
         seen: set[str] = set()
-        ad_error: Optional[str] = None
+        errors: List[str] = []
+        guid_pattern = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
         try:
             with ADClient(config.ldap) as client:
                 for group in client.list_groups(query or None, limit):
@@ -902,13 +937,52 @@ def register_routes(app: Flask) -> None:
                     items.append(
                         {
                             "name": group.get("name") or _group_display_name(dn),
+                            "id": dn,
                             "distinguishedName": dn,
                             "sAMAccountName": group.get("sAMAccountName"),
                             "description": group.get("description"),
+                            "source": "ad",
                         }
                     )
-        except Exception as exc:  # pragma: no cover - graceful degradation
-            ad_error = str(exc)
+        except Exception as exc:
+            errors.append(f"AD: {exc}")
+
+        try:
+            m365_client = _get_m365_client(app, config)
+            if m365_client:
+                if query and guid_pattern.match(query):
+                    try:
+                        group = m365_client.get_group(query)
+                        if group and group.get("id") not in seen:
+                            seen.add(group["id"])
+                            items.append(
+                                {
+                                    "name": group.get("displayName") or group.get("mailNickname") or query,
+                                    "id": group["id"],
+                                    "mailNickname": group.get("mailNickname"),
+                                    "description": group.get("description"),
+                                    "source": "azure",
+                                }
+                            )
+                    except Exception:
+                        pass
+                azure_groups = m365_client.list_groups(query or None, limit)
+                for group in azure_groups:
+                    group_id = group.get("id")
+                    if not group_id or group_id in seen:
+                        continue
+                    seen.add(group_id)
+                    items.append(
+                        {
+                            "name": group.get("displayName") or group.get("mailNickname"),
+                            "id": group_id,
+                            "mailNickname": group.get("mailNickname"),
+                            "description": group.get("description"),
+                            "source": "azure",
+                        }
+                    )
+        except Exception as exc:
+            errors.append(f"Azure: {exc}")
 
         roles = _load_roles(config)
         lowered = query.lower() if query else None
@@ -922,12 +996,15 @@ def register_routes(app: Flask) -> None:
                 if lowered and lowered not in normalized.lower():
                     continue
                 seen.add(normalized)
+                source = "azure" if guid_pattern.match(normalized) else "ad"
                 items.append(
                     {
-                        "name": _group_display_name(normalized),
-                        "distinguishedName": normalized,
+                        "name": _group_display_name(normalized) if source == "ad" else normalized,
+                        "id": normalized,
+                        "distinguishedName": normalized if source == "ad" else None,
                         "sAMAccountName": None,
                         "description": None,
+                        "source": source,
                     }
                 )
                 if len(items) >= limit:
@@ -936,8 +1013,8 @@ def register_routes(app: Flask) -> None:
                 break
 
         payload: Dict[str, Any] = {"items": items[:limit]}
-        if ad_error:
-            payload["error"] = ad_error
+        if errors:
+            payload["errors"] = errors
         return jsonify(payload)
 
     @app.get("/api/roles")
@@ -1094,12 +1171,47 @@ def register_routes(app: Flask) -> None:
                     )
                     template_groups = client.get_user_groups(user_dn)
                     app.logger.info(
-                        "Clone template groups loaded user_dn=%s group_count=%s",
+                        "Clone template AD groups loaded user_dn=%s group_count=%s",
                         user_dn,
                         len(template_groups or []),
                     )
             except Exception as exc:
                 flash(f"Unable to load selected user: {exc}", "error")
+
+            if selected_user and m365_status.get("configured"):
+                try:
+                    m365_client = _get_m365_client(app, config)
+                    if m365_client:
+                        lookup = (
+                            (selected_user.get("userPrincipalName") or "").strip()
+                            or (selected_user.get("mail") or "").strip()
+                        )
+                        if lookup:
+                            graph_user = m365_client.find_user(lookup, select="id")
+                            if graph_user:
+                                azure_group_ids = m365_client.get_user_groups(graph_user["id"])
+                                if azure_group_ids:
+                                    ad_group_names = set()
+                                    for group_dn in template_groups:
+                                        name = _group_display_name(group_dn)
+                                        ad_group_names.add(name.lower())
+                                    
+                                    for group_id in azure_group_ids:
+                                        try:
+                                            group_details = m365_client.get_group(group_id)
+                                            group_name = (group_details.get("displayName") or "").lower()
+                                            if group_name not in ad_group_names:
+                                                template_groups.append(group_id)
+                                        except Exception:
+                                            template_groups.append(group_id)
+                                    
+                                    app.logger.info(
+                                        "Clone template Azure groups loaded user=%s azure_group_count=%s",
+                                        lookup,
+                                        len(azure_group_ids),
+                                    )
+                except Exception as exc:
+                    app.logger.warning("Unable to load Azure groups for template user: %s", exc)
 
         if selected_user and m365_status.get("configured"):
             try:
@@ -1312,6 +1424,15 @@ def register_routes(app: Flask) -> None:
                 else:
                     attributes.pop("physicalDeliveryOfficeName", None)
 
+                ad_groups, azure_groups = _separate_groups(selected_groups)
+                app.logger.info(
+                    "Clone: separated groups - selected_count=%s ad_count=%s azure_count=%s ad_groups=%s azure_groups=%s",
+                    len(selected_groups),
+                    len(ad_groups),
+                    len(azure_groups),
+                    ad_groups,
+                    azure_groups,
+                )
                 employee = Employee(
                     first_name=first_name,
                     last_name=last_name,
@@ -1320,7 +1441,7 @@ def register_routes(app: Flask) -> None:
                     job_role=role_name,
                     manager_dn=manager_dn,
                     attributes=attributes,
-                    groups=selected_groups,
+                    groups=ad_groups,
                     licenses=form_license_selections,
                 )
 
@@ -1330,6 +1451,15 @@ def register_routes(app: Flask) -> None:
                 with ADClient(config.ldap) as client:
                     result = client.create_user(employee, job_role, password=password)
 
+                _trigger_sync(config)
+
+                all_assigned_groups = ad_groups + azure_groups
+                app.logger.info(
+                    "Clone: groups will be assigned - ad_groups=%s azure_groups=%s",
+                    ad_groups,
+                    azure_groups,
+                )
+
                 try:
                     seed_status = _auto_seed_job_role(
                         config,
@@ -1338,7 +1468,7 @@ def register_routes(app: Flask) -> None:
                         user_ou=job_role.user_ou or chosen_ou or config.ldap.user_ou,
                         default_manager_dn=manager_dn,
                         attributes=attributes,
-                        groups=selected_groups,
+                        groups=all_assigned_groups,
                         licenses=form_license_selections,
                     )
                     if seed_status == "created":
@@ -1370,13 +1500,27 @@ def register_routes(app: Flask) -> None:
                         preferred_principal,
                         form_license_selections,
                         alternates=principal_candidates,
+                        azure_groups=azure_groups,
                     )
-                if queued_license:
-                    flash(
-                        "Microsoft 365 license assignment queued; it will apply shortly.",
-                        "info",
+                    if queued_license:
+                        flash(
+                            "Microsoft 365 license and group assignment queued; it will apply shortly.",
+                            "info",
+                        )
+                elif azure_groups and preferred_principal:
+                    queued_groups = _enqueue_license_jobs(
+                        app,
+                        config,
+                        preferred_principal,
+                        [],
+                        alternates=principal_candidates,
+                        azure_groups=azure_groups,
                     )
-                _trigger_sync(config)
+                    if queued_groups:
+                        flash(
+                            "Microsoft 365 group assignment queued; it will apply shortly.",
+                            "info",
+                        )
                 flash(
                     f"Cloned user into account {result.get('sAMAccountName')}.",
                     "success",
@@ -1869,10 +2013,11 @@ def _filter_assignable_groups(groups: Iterable[str], config: AppConfig) -> Tuple
     if not base:
         return normalized, []
 
+    guid_pattern = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
     assignable: List[str] = []
     skipped: List[str] = []
     for group_dn in normalized:
-        if group_dn.lower().endswith(base):
+        if guid_pattern.match(group_dn) or group_dn.lower().endswith(base):
             assignable.append(group_dn)
         else:
             skipped.append(group_dn)
@@ -1993,7 +2138,7 @@ def _get_license_store(app: Flask, config: AppConfig) -> LicenseJobStore:
     store = app.config.get("_LICENSE_JOB_STORE")
     path = config.storage.license_jobs_file
     if store is None or getattr(store, "path", None) != path:
-        store = LicenseJobStore(path)
+        store = LicenseJobStore(path, max_attempts=5)
         app.config["_LICENSE_JOB_STORE"] = store
     return store
 
@@ -2041,27 +2186,47 @@ def _process_license_job(
     client: M365Client,
     job: LicenseJob,
 ) -> None:
+    print(f"\n{'='*80}")
+    print(f"PROCESSING LICENSE JOB: {job.id}")
+    print(f"  Principal: {job.principal}")
+    print(f"  SKU ID: {job.sku_id or '(none - groups only)'}")
+    print(f"  Azure Groups: {len(job.azure_groups)} groups")
+    print(f"  Attempt: {job.attempts + 1}")
+    print(f"{'='*80}\n")
+    app.logger.info(
+        "Processing license job: principal=%s sku_id=%s azure_groups=%s attempts=%s",
+        job.principal,
+        job.sku_id or "(none)",
+        job.azure_groups,
+        job.attempts,
+    )
     retry_index = min(job.attempts, len(_LICENSE_RETRY_SCHEDULE) - 1)
     retry_delay = timedelta(seconds=_LICENSE_RETRY_SCHEDULE[retry_index])
 
+    print("Looking up user in Microsoft 365...")
     lookup_candidates = [job.principal] + [candidate for candidate in job.principal_candidates if candidate]
+    print(f"  Candidates: {lookup_candidates}")
     graph_user: Optional[Dict[str, Any]] = None
     chosen_lookup: Optional[str] = None
     for candidate in lookup_candidates:
         if not candidate:
             continue
         chosen_lookup = candidate
+        print(f"  Trying: {candidate}")
         try:
             graph_user = client.find_user(candidate, select="id,userPrincipalName,usageLocation")
         except M365ClientError as exc:
+            print(f"  ERROR: M365 lookup failed: {exc}")
             store.defer_job(job.id, retry_delay, str(exc))
             app.logger.warning("Microsoft 365 lookup failed for %s: %s", candidate, exc)
             return
         except Exception as exc:
+            print(f"  ERROR: Unexpected lookup error: {exc}")
             store.defer_job(job.id, retry_delay, str(exc))
             app.logger.exception("Unexpected error looking up %s: %s", candidate, exc)
             return
         if graph_user and graph_user.get("id"):
+            print(f"  FOUND: {graph_user.get('userPrincipalName')} (ID: {graph_user.get('id')})")
             if candidate != job.principal:
                 job.principal = candidate
                 job.principal_candidates = [
@@ -2071,6 +2236,7 @@ def _process_license_job(
             break
     else:
         chosen_lookup = job.principal
+        print(f"  NOT FOUND: User not yet synced to Microsoft 365")
         store.defer_job(job.id, retry_delay, "User not yet available in Microsoft 365.")
         app.logger.info(
             "License assignment deferred for %s; user not found.",
@@ -2079,68 +2245,217 @@ def _process_license_job(
         return
 
     lookup = chosen_lookup or job.principal
-
     user_id = graph_user["id"]
+    
     usage_location = str(graph_user.get("usageLocation") or "").strip()
-    if not usage_location:
-        default_usage_location = str(config.m365.default_usage_location or "").strip()
+    default_usage_location = str(config.m365.default_usage_location or "").strip()
+    
+    if not usage_location or len(usage_location) != 2:
         if not default_usage_location:
             store.defer_job(
                 job.id,
                 retry_delay,
-                "User missing usage location; configure m365.default_usage_location.",
+                "User missing valid usage location; configure m365.default_usage_location.",
             )
             app.logger.warning(
-                "Microsoft 365 assignLicense deferred for %s (%s): usageLocation missing "
-                "and no default configured.",
+                "Microsoft 365 job deferred for %s: usageLocation missing/invalid and no default configured.",
                 lookup,
-                job.sku_id,
             )
             return
+        print(f"\nSetting usage location to {default_usage_location}...")
         try:
             client.update_user(user_id, usageLocation=default_usage_location)
             usage_location = default_usage_location
+            print(f"  SUCCESS: Set usageLocation={default_usage_location}")
+            print(f"  Waiting 15 seconds for Azure to process...")
             app.logger.info(
-                "Set usageLocation=%s for %s prior to license assignment.",
+                "Set usageLocation=%s for %s prior to license/group assignment.",
                 default_usage_location,
                 lookup,
             )
+            time.sleep(15)
         except M365ClientError as exc:
-            store.defer_job(job.id, retry_delay, f"Unable to set usageLocation: {exc}")
+            print(f"  FAILED: {exc}")
+            if "does not exist" in str(exc).lower() or "not found" in str(exc).lower():
+                store.defer_job(job.id, retry_delay, f"Unable to set usageLocation: {exc}")
+                app.logger.warning(
+                    "Microsoft 365 usageLocation update deferred for %s: %s",
+                    lookup,
+                    exc,
+                )
+                return
             app.logger.warning(
-                "Microsoft 365 usageLocation update deferred for %s (%s): %s",
+                "Microsoft 365 usageLocation update failed for %s (continuing anyway): %s",
+                lookup,
+                exc,
+            )
+        except Exception as exc:
+            print(f"  UNEXPECTED ERROR: {exc}")
+            app.logger.warning(
+                "Unexpected error setting usageLocation for %s (continuing anyway): %s", lookup, exc
+            )
+
+    if job.sku_id:
+        print(f"\nAssigning license {job.sku_id}...")
+        print(f"  User ID: {user_id}")
+        print(f"  Usage Location: {usage_location}")
+        print(f"  Disabled plans: {job.disabled_plans}")
+        
+        base_skus = {
+            "05e9a617-0261-4cee-bb44-138d3ef5d965",
+            "c5928f49-12ba-48f7-ada3-0d743a3601d5",
+            "6fd2c87f-b296-42f0-b197-1e91e994b900",
+            "f30db892-07e9-47e9-837c-80727f46fd3d",
+            "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46",
+            "ac5cef5d-921b-4f97-9ef3-c99076e5470f",
+            "4b590615-0888-425a-a965-b3bf7789848d",
+            "66b55226-6b4f-492c-910c-a3b7a3c9d993",
+            "18181a46-0d4e-45cd-891e-60aabd171b4e",
+            "1392051d-0cb9-4b7a-88d5-621fee5e8711",
+            "4b585984-651b-448a-9e53-3b10f069cf7f",
+            "53818b1b-4a27-454b-8896-0dba576410e6",
+            "09015f9f-377f-4538-bbb5-f75ceb09358a",
+        }
+        is_base_license = job.sku_id.lower() in {s.lower() for s in base_skus}
+        
+        try:
+            app.logger.info("Attempting to assign license %s to %s (user_id=%s)", job.sku_id, lookup, user_id)
+            client.assign_license(user_id, job.sku_id, job.disabled_plans)
+            print(f"  SUCCESS: License {job.sku_id} assigned")
+            app.logger.info("Successfully assigned Microsoft 365 license %s to %s.", job.sku_id, lookup)
+            
+            if is_base_license:
+                print(f"  Waiting 30 seconds for Exchange mailbox provisioning...")
+                time.sleep(30)
+            else:
+                time.sleep(5)
+        except M365ClientError as exc:
+            error_msg = str(exc)
+            status_code = getattr(exc, "status_code", 0)
+            print(f"  FAILED: Status {status_code} - {error_msg}")
+            
+            if status_code == 400:
+                if "depends on the service plan" in error_msg.lower() and not is_base_license:
+                    print(f"  DEFERRING: Dependency error, will retry after base license provisions")
+                    store.defer_job(job.id, timedelta(seconds=60), error_msg)
+                    app.logger.warning(
+                        "Microsoft 365 license assignment deferred for %s (%s): dependency error, retrying",
+                        lookup,
+                        job.sku_id,
+                    )
+                    return
+                
+                store.mark_completed(job.id)
+                print(f"  MARKING AS COMPLETE (400 error - will not retry)")
+                app.logger.error(
+                    "Microsoft 365 license assignment FAILED (400) for %s (%s): %s - marked complete",
+                    lookup,
+                    job.sku_id,
+                    exc,
+                )
+                return
+            
+            print(f"  DEFERRING: Will retry in {retry_delay.total_seconds()}s")
+            store.defer_job(job.id, retry_delay, error_msg)
+            app.logger.warning(
+                "Microsoft 365 assignLicense deferred for %s (%s): %s",
                 lookup,
                 job.sku_id,
                 exc,
             )
             return
         except Exception as exc:
+            print(f"  UNEXPECTED ERROR: {exc}")
             store.defer_job(job.id, retry_delay, str(exc))
             app.logger.exception(
-                "Unexpected error setting usageLocation for %s: %s", lookup, exc
+                "Unexpected error assigning license %s to %s: %s", job.sku_id, lookup, exc
             )
             return
 
-    try:
-        client.assign_license(user_id, job.sku_id, job.disabled_plans)
-    except M365ClientError as exc:
-        store.defer_job(job.id, retry_delay, str(exc))
-        app.logger.warning(
-            "Microsoft 365 assignLicense deferred for %s (%s): %s",
+    if job.azure_groups:
+        print(f"\nProcessing {len(job.azure_groups)} Azure groups...")
+        app.logger.info(
+            "Processing %s Azure groups for %s (user_id=%s)",
+            len(job.azure_groups),
             lookup,
-            job.sku_id,
-            exc,
+            user_id,
         )
-        return
-    except Exception as exc:
-        store.defer_job(job.id, retry_delay, str(exc))
-        app.logger.exception(
-            "Unexpected error assigning license %s to %s: %s", job.sku_id, lookup, exc
-        )
-        return
+        for idx, group_id in enumerate(job.azure_groups, 1):
+            print(f"\n  Group {idx}/{len(job.azure_groups)}: {group_id}")
+            try:
+                group_details = client.get_group(group_id)
+                group_name = group_details.get("displayName") or group_id
+                on_prem_synced = group_details.get("onPremisesSyncEnabled")
+                mail_enabled = group_details.get("mailEnabled")
+                security_enabled = group_details.get("securityEnabled")
+                group_types = group_details.get("groupTypes") or []
+                membership_rule = group_details.get("membershipRule")
+                
+                print(f"    Name: {group_name}")
+                print(f"    OnPremSync: {on_prem_synced}, Mail: {mail_enabled}, Security: {security_enabled}")
+                print(f"    Types: {group_types}, Dynamic: {bool(membership_rule)}")
+                
+                if on_prem_synced:
+                    print(f"    SKIPPED: On-premises synced (managed in AD)")
+                    app.logger.warning(
+                        "SKIPPED: On-premises synced group %s (%s) - must be managed in AD",
+                        group_name,
+                        group_id,
+                    )
+                    continue
+                
+                if membership_rule or "DynamicMembership" in group_types:
+                    print(f"    SKIPPED: Dynamic group (rule-based membership)")
+                    app.logger.warning(
+                        "SKIPPED: Dynamic group %s (%s) - membership is rule-based",
+                        group_name,
+                        group_id,
+                    )
+                    continue
+                
+                is_distribution_list = mail_enabled and not security_enabled and "Unified" not in group_types
+                if is_distribution_list:
+                    if config.m365.has_exo_credentials:
+                        print(f"    Adding to Distribution List via Exchange Online...")
+                        try:
+                            _add_to_distribution_list(app, config, lookup, group_id)
+                            print(f"    SUCCESS: Added to DL {group_name}")
+                            app.logger.info("Added %s to distribution list %s via Exchange Online.", lookup, group_name)
+                        except Exception as dl_exc:
+                            print(f"    FAILED: {dl_exc}")
+                            app.logger.error("Failed to add %s to DL %s: %s", lookup, group_name, dl_exc)
+                    else:
+                        print(f"    SKIPPED: Distribution list (Exchange Online not configured)")
+                        app.logger.warning(
+                            "SKIPPED: Distribution list %s (%s) - Exchange Online credentials not configured",
+                            group_name,
+                            group_id,
+                        )
+                    continue
+                
+                print(f"    Adding user to group...")
+                client.add_user_to_group(user_id, group_id)
+                print(f"    SUCCESS: Added to {group_name}")
+                app.logger.info("Successfully added %s to Azure group %s (%s).", lookup, group_name, group_id)
+            except M365ClientError as exc:
+                print(f"    FAILED: {exc}")
+                app.logger.error(
+                    "FAILED to add %s to Azure group %s: %s",
+                    lookup,
+                    group_id,
+                    exc,
+                )
+            except Exception as exc:
+                print(f"    UNEXPECTED ERROR: {exc}")
+                app.logger.exception(
+                    "Unexpected error adding %s to Azure group %s: %s",
+                    lookup,
+                    group_id,
+                    exc,
+                )
 
+    print(f"\nJOB COMPLETED: {job.id}\n")
     store.mark_completed(job.id)
-    app.logger.info("Assigned Microsoft 365 license %s to %s.", job.sku_id, lookup)
 
 
 def _enqueue_license_job(
@@ -2150,8 +2465,11 @@ def _enqueue_license_job(
     sku_id: Optional[str],
     disabled_plans: Iterable[str],
     alternates: Optional[Iterable[str]] = None,
+    azure_groups: Optional[Iterable[str]] = None,
 ) -> bool:
-    if not principal or not sku_id:
+    if not principal:
+        return False
+    if not sku_id and not azure_groups:
         return False
     if not config.m365.has_credentials:
         app.logger.info(
@@ -2166,6 +2484,7 @@ def _enqueue_license_job(
             sku_id=sku_id,
             disabled_plans=disabled_plans,
             alternates=alternates or [],
+            azure_groups=azure_groups or [],
             delay_seconds=_LICENSE_INITIAL_DELAY_SECONDS,
         )
         app.logger.info("Queued Microsoft 365 license assignment for %s (%s).", principal, sku_id)
@@ -2181,9 +2500,48 @@ def _enqueue_license_jobs(
     principal: Optional[str],
     selections: Iterable[LicenseSelection],
     alternates: Optional[Iterable[str]] = None,
+    azure_groups: Optional[Iterable[str]] = None,
 ) -> bool:
     queued_any = False
-    for selection in _merge_license_selections(selections):
+    merged = _merge_license_selections(selections)
+    
+    print(f"\n=== LICENSE QUEUEING ===")
+    print(f"Principal: {principal}")
+    print(f"Total licenses to queue: {len(merged)}")
+    for idx, sel in enumerate(merged, 1):
+        print(f"  {idx}. SKU: {sel.sku_id}, Disabled plans: {len(sel.disabled_plans)}")
+    
+    base_skus = {
+        "05e9a617-0261-4cee-bb44-138d3ef5d965",  # M365 E3
+        "c5928f49-12ba-48f7-ada3-0d743a3601d5",  # Visio Plan 2
+        "6fd2c87f-b296-42f0-b197-1e91e994b900",  # M365 E5
+        "f30db892-07e9-47e9-837c-80727f46fd3d",  # M365 Business Premium
+        "cbdc14ab-d96c-4c30-b9f4-6ada7cdc1d46",  # M365 Business Basic
+        "ac5cef5d-921b-4f97-9ef3-c99076e5470f",  # M365 Business Standard
+        "4b590615-0888-425a-a965-b3bf7789848d",  # M365 F3
+        "66b55226-6b4f-492c-910c-a3b7a3c9d993",  # M365 F1
+        "18181a46-0d4e-45cd-891e-60aabd171b4e",  # Office 365 E1
+        "1392051d-0cb9-4b7a-88d5-621fee5e8711",  # Office 365 E5
+        "4b585984-651b-448a-9e53-3b10f069cf7f",  # Project Plan 1
+        "53818b1b-4a27-454b-8896-0dba576410e6",  # Project Plan 3
+        "09015f9f-377f-4538-bbb5-f75ceb09358a",  # Project Plan 5
+    }
+    
+    base_selections = []
+    addon_selections = []
+    
+    for selection in merged:
+        if selection.sku_id.lower() in {s.lower() for s in base_skus}:
+            base_selections.append(selection)
+            print(f"  Classified as BASE: {selection.sku_id}")
+        else:
+            addon_selections.append(selection)
+            print(f"  Classified as ADDON: {selection.sku_id}")
+    
+    print(f"\nQueueing order: {len(base_selections)} base licenses first, then {len(addon_selections)} add-ons")
+    
+    for idx, selection in enumerate(base_selections, 1):
+        print(f"  Queueing BASE {idx}/{len(base_selections)}: {selection.sku_id}")
         queued = _enqueue_license_job(
             app,
             config,
@@ -2191,9 +2549,54 @@ def _enqueue_license_jobs(
             selection.sku_id,
             selection.disabled_plans,
             alternates=alternates,
+            azure_groups=[],
         )
         queued_any = queued_any or queued
+    
+    for idx, selection in enumerate(addon_selections, 1):
+        print(f"  Queueing ADDON {idx}/{len(addon_selections)}: {selection.sku_id}")
+        queued = _enqueue_license_job(
+            app,
+            config,
+            principal,
+            selection.sku_id,
+            selection.disabled_plans,
+            alternates=alternates,
+            azure_groups=[],
+        )
+        queued_any = queued_any or queued
+    
+    if azure_groups:
+        print(f"  Queueing GROUPS job with {len(azure_groups)} groups")
+        queued = _enqueue_license_job(
+            app,
+            config,
+            principal,
+            "",
+            [],
+            alternates=alternates,
+            azure_groups=azure_groups,
+        )
+        queued_any = queued_any or queued
+    
+    print(f"=== QUEUEING COMPLETE ===\n")
     return queued_any
+
+
+def _separate_groups(groups: Iterable[str]) -> Tuple[List[str], List[str]]:
+    """Separate groups into AD (DN format) and Azure (GUID format) groups."""
+    ad_groups: List[str] = []
+    azure_groups: List[str] = []
+    guid_pattern = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+    for group in groups:
+        if not group:
+            continue
+        group = group.strip()
+        if guid_pattern.match(group):
+            azure_groups.append(group)
+        else:
+            ad_groups.append(group)
+    return ad_groups, azure_groups
 
 
 def _trigger_sync(config: AppConfig) -> None:
@@ -2201,6 +2604,51 @@ def _trigger_sync(config: AppConfig) -> None:
         run_sync_command(config.sync)
     except RuntimeError as exc:
         flash(f"Directory sync reported a problem: {exc}", "error")
+
+
+def _add_to_distribution_list(
+    app: Flask,
+    config: AppConfig,
+    user_email: str,
+    group_id: str,
+) -> None:
+    ps5_path = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    
+    script = f"""$env:PSModulePath = [System.Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
+Import-Module ExchangeOnlineManagement -ErrorAction Stop
+$ErrorActionPreference = 'Stop'
+try {{
+    Connect-ExchangeOnline -AppId '{config.m365.client_id}' -CertificateThumbprint '{config.m365.cert_thumbprint}' -Organization '{config.m365.exo_organization}' -ShowBanner:$false -ErrorAction Stop
+    
+    $group = Get-DistributionGroup -Identity '{group_id}' -ErrorAction Stop
+    $groupEmail = $group.PrimarySmtpAddress
+    
+    Add-DistributionGroupMember -Identity $groupEmail -Member '{user_email}' -ErrorAction Stop
+    Write-Output 'SUCCESS'
+}} catch {{
+    Write-Error $_.Exception.Message
+    exit 1
+}} finally {{
+    try {{ Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+}}"""
+    
+    env = os.environ.copy()
+    env.pop('PSModulePath', None)
+    
+    result = subprocess.run(
+        [ps5_path, "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    
+    if result.returncode != 0 or "SUCCESS" not in result.stdout:
+        error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+        raise RuntimeError(f"Exchange command failed: {error_msg}")
+
+
+
 
 
 def main() -> None:
