@@ -210,6 +210,30 @@ class M365Client:
             return {}
         return self._request("PATCH", f"/users/{user_id}", json=payload)
 
+    def get_user(self, user_id: str, select: Optional[str] = None) -> Dict[str, Any]:
+        params = {}
+        if select:
+            params["$select"] = select
+        return self._request("GET", f"/users/{user_id}", params=params)
+
+    def remove_all_licenses(self, user_id: str) -> Dict[str, Any]:
+        """Remove all licenses from a user."""
+        user = self.get_user(user_id, select="assignedLicenses")
+        assigned = user.get("assignedLicenses", [])
+        if not assigned:
+            return {}
+        sku_ids = [lic["skuId"] for lic in assigned if lic.get("skuId")]
+        payload = {"addLicenses": [], "removeLicenses": sku_ids}
+        return self._request("POST", f"/users/{user_id}/assignLicense", json=payload)
+
+    def block_sign_in(self, user_id: str) -> Dict[str, Any]:
+        """Block user from signing in."""
+        return self.update_user(user_id, accountEnabled=False)
+
+    def restore_user(self, user_id: str) -> Dict[str, Any]:
+        """Restore a deleted user."""
+        return self._request("POST", f"/directory/deletedItems/{user_id}/restore")
+
     # ------------------------------------------------------------------ #
     # Group helpers                                                      #
     # ------------------------------------------------------------------ #
@@ -241,6 +265,16 @@ class M365Client:
             f"/groups/{group_id}",
             params={"$select": "id,displayName,mailNickname,description,mailEnabled,securityEnabled,groupTypes,onPremisesSyncEnabled,membershipRule"},
         )
+
+    def remove_all_group_memberships(self, user_id: str) -> int:
+        """Remove user from all groups. Returns count of groups removed."""
+        group_ids = self.get_user_groups(user_id)
+        for group_id in group_ids:
+            try:
+                self.remove_user_from_group(user_id, group_id)
+            except M365GraphError:
+                pass
+        return len(group_ids)
 
     # ------------------------------------------------------------------ #
     # Cache read/write helpers                                           #

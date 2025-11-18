@@ -1,3 +1,694 @@
 {
-  "jobs": []
+  "jobs": [
+    {
+      "id": "f21dd117-f88b-4969-8b73-840a0ca0b2ff",
+      "principal": "Test.Employee61@amanomcgann.com",
+      "sku_id": "05e9a617-0261-4cee-bb44-138d3ef5d965",
+      "principal_candidates": [
+        "Test.Employee61"
+      ],
+      "disabled_plans": [
+        "0403bb98-9d17-4f94-b53e-eca56a7698a6",
+        "2b815d45-56e4-4e3a-b65c-66cb9175b560",
+        "6f23d6a9-adbf-481c-8538-b4c095654487",
+        "882e1d05-acd1-4ccb-8708-6ee03664b117",
+        "94065c59-bc8e-4e8b-89e5-5138d471eaff",
+        "b088306e-925b-44ab-baa0-63291c629a91",
+        "d55411c9-cfff-40a9-87c7-240f14df7da5",
+        "db4d623d-b514-490b-b7ef-8885eee514de"
+      ],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T20:42:24.340530+00:00",
+      "not_before": "2025-11-18T20:43:54.340537+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T20:44:45.051157+00:00",
+      "last_error": null
+    },
+    {
+      "id": "829ccf5b-ff7e-482a-baa4-824bd137c3a1",
+      "principal": "Test.Employee61@amanomcgann.com",
+      "sku_id": "",
+      "principal_candidates": [
+        "Test.Employee61"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [
+        "fac08343-d12f-4c4c-801d-d75785596008"
+      ],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T20:42:24.344009+00:00",
+      "not_before": "2025-11-18T20:43:54.344014+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T20:44:45.414459+00:00",
+      "last_error": null
+    },
+    {
+      "id": "559ed681-1f1f-4b8f-8173-97cc7bcd5f57",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "05e9a617-0261-4cee-bb44-138d3ef5d965",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T20:51:38.546490+00:00",
+      "not_before": "2025-11-18T20:53:08.546501+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T20:53:33.174266+00:00",
+      "last_error": null
+    },
+    {
+      "id": "d562cb89-889e-4e9e-bfb1-7f3606a0ec8f",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "f30db892-07e9-47e9-837c-80727f46fd3d",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T20:51:38.550837+00:00",
+      "not_before": "2025-11-18T20:53:08.550843+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T20:54:18.611566+00:00",
+      "last_error": null
+    },
+    {
+      "id": "7f8c4ab2-675e-439e-8d27-c07551f8e8c6",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "c5928f49-12ba-48f7-ada3-0d743a3601d5",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T20:51:38.555065+00:00",
+      "not_before": "2025-11-18T20:53:08.555070+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T20:54:18.907490+00:00",
+      "last_error": null
+    },
+    {
+      "id": "99ab38d1-802d-40a1-bb65-8f0efde148bf",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "2bc9d149-a1dc-4d8f-bcd8-e9c5750a59b5",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T20:51:38.558720+00:00",
+      "not_before": "2025-11-18T20:53:08.558725+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T20:54:19.136755+00:00",
+      "last_error": null
+    },
+    {
+      "id": "0da5c1fd-04e7-47b5-b159-678be7b28921",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "639dec6b-bb19-468b-871c-c5c441c4b0cb",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T20:51:38.561635+00:00",
+      "not_before": "2025-11-18T20:53:08.561639+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T20:54:24.496568+00:00",
+      "last_error": null
+    },
+    {
+      "id": "a2a855d8-3111-4875-b73f-4cef91fff3b0",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "0e024cea-e275-472d-a1d3-f7a78df1b833",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "failed",
+      "attempts": 5,
+      "created_at": "2025-11-18T20:51:38.565030+00:00",
+      "not_before": "2025-11-18T21:02:11.329263+00:00",
+      "last_attempt_at": "2025-11-18T21:01:11.329263+00:00",
+      "completed_at": null,
+      "last_error": "400: Request_BadRequest - License assignment failed because service plan 4828c8ec-dc2e-4779-b502-87ac9ce28ab7 depends on the service plan(s) 57ff2da0-773e-42df-b2af-ffb7a2317929,0feaeb32-d00e-4d66-bd5a-43b5b83db82c"
+    },
+    {
+      "id": "e3cee7a4-eadf-4d15-8245-73ed0e7df31d",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "606b54a9-78d8-4298-ad8b-df6ef4481c80",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 1,
+      "created_at": "2025-11-18T20:51:38.568445+00:00",
+      "not_before": "2025-11-18T20:54:55.098503+00:00",
+      "last_attempt_at": "2025-11-18T20:54:25.098503+00:00",
+      "completed_at": "2025-11-18T20:57:59.312587+00:00",
+      "last_error": null
+    },
+    {
+      "id": "a6ecd3fd-4c8a-43a4-a2dd-90a9c967f77a",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "1c27243e-fb4d-42b1-ae8c-fe25c9616588",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 2,
+      "created_at": "2025-11-18T20:51:38.571280+00:00",
+      "not_before": "2025-11-18T20:58:29.636401+00:00",
+      "last_attempt_at": "2025-11-18T20:57:59.636401+00:00",
+      "completed_at": "2025-11-18T20:58:40.448114+00:00",
+      "last_error": null
+    },
+    {
+      "id": "56ec84dd-49a3-4e93-ac22-5765632ce4e3",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "9c7bff7a-3715-4da7-88d3-07f57f8d0fb6",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 1,
+      "created_at": "2025-11-18T20:51:38.574747+00:00",
+      "not_before": "2025-11-18T20:54:55.714827+00:00",
+      "last_attempt_at": "2025-11-18T20:54:25.714827+00:00",
+      "completed_at": "2025-11-18T20:58:05.017709+00:00",
+      "last_error": null
+    },
+    {
+      "id": "552daa58-f615-4e27-8963-e0102c218f32",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "726a0894-2c77-4d65-99da-9775ef05aad1",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T20:51:38.580053+00:00",
+      "not_before": "2025-11-18T20:53:08.580059+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T20:54:31.208818+00:00",
+      "last_error": null
+    },
+    {
+      "id": "ef716198-d890-4c52-aa96-7f46e3651825",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "dcb1a3ae-b33f-4487-846a-a640262fadf4",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T20:51:38.584533+00:00",
+      "not_before": "2025-11-18T20:53:08.584537+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T20:54:36.786868+00:00",
+      "last_error": null
+    },
+    {
+      "id": "70a4eca1-946f-4e51-8bb1-b9957fd027f6",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "87bbbc60-4754-4998-8c88-227dca264858",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T20:51:38.587949+00:00",
+      "not_before": "2025-11-18T20:53:08.587953+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T20:54:42.117087+00:00",
+      "last_error": null
+    },
+    {
+      "id": "a165582d-363e-4873-85c5-e9b5cf8c6ef3",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "a403ebcc-fae0-4ca2-8c8c-7a907fd6c235",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T20:51:38.591149+00:00",
+      "not_before": "2025-11-18T20:53:08.591151+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T20:54:47.448676+00:00",
+      "last_error": null
+    },
+    {
+      "id": "0114f08f-80ed-47a3-8f22-df82ac4d4561",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "1f2f344a-700d-42c9-9427-5cea1d5d7ba6",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T20:51:38.594412+00:00",
+      "not_before": "2025-11-18T20:53:08.594417+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T20:54:52.795735+00:00",
+      "last_error": null
+    },
+    {
+      "id": "78121ca7-0f26-4d3b-a0bb-adb02d031581",
+      "principal": "Test.Employee1@amanomcgann.com",
+      "sku_id": "",
+      "principal_candidates": [
+        "Test.Employee1"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [
+        "568a4219-a7dd-4bb9-9d6c-b08175faa176",
+        "09ba685a-0c4c-4921-b8f1-51afa9a30442",
+        "0f7e06bd-9dc5-4d7b-9be2-783acd9107ee",
+        "5b17b365-22cb-49b0-b4a7-1483ff988ae2",
+        "dd8f6af9-7475-4d02-b4cf-739dfa1a0022",
+        "4a37abc6-8090-4385-8db0-bf9b54ee97f5",
+        "031cf4fb-5c29-4a4e-902b-100d04564ea4",
+        "fc7bc649-ef74-469e-a7f3-8f7c0e543723",
+        "a7c3fc71-f741-486c-8db0-875b7da94c8f",
+        "11e79b56-24db-4bdf-86e5-bb6b4e84a243",
+        "1b1c2a2c-8347-4d2f-8848-d1c1f66c8fe1",
+        "3aa5187e-f031-4e22-8734-8cab0cc410cb",
+        "777d748b-d88e-4ddf-a7c9-d8673906d6cf",
+        "ab530513-ebb1-4156-8f63-29186155049b",
+        "5ada95a2-b128-4fe9-8720-767d11e7eb7f",
+        "e5faa6ae-92f4-4b63-9607-8c0260a51ad1",
+        "245a2b3d-371c-4465-95b7-3c83783b2552",
+        "e006746f-a718-47e7-a31c-1613e5fc9d73",
+        "4209bb6a-d185-4cf6-9b6d-364eaa8a70ad",
+        "18043833-681d-42a0-9203-e3dc48652963",
+        "a6defb8c-8d91-4413-ba42-5b68b2d3c052",
+        "64ba7d6c-d10e-4fbe-ac8f-536e4534e262",
+        "051caf87-443f-48f2-bf17-7e22ab6c5ed6",
+        "028388b6-3aa4-4858-86c8-115b01672dde",
+        "d028d9e0-9fc8-4b2a-9b78-59f6d9ea70ea",
+        "4868c73a-db02-4235-b857-65e48c07ce26",
+        "6a1a540c-dc4c-4707-a9a9-342458e2bb59",
+        "bd4dc2bd-032a-48db-ba91-11b247969de8",
+        "ce878080-1625-42a0-85f2-332a09a32a9d",
+        "7801646c-dca5-43ef-9e7e-1e74e7f743fa",
+        "6ea76e03-89e2-4752-928f-93143c265dbb",
+        "5aa12406-5bfb-4e0b-b195-76200d165426",
+        "cd7de33f-f6fe-4f18-be3d-57ea677dc866",
+        "fe39533d-2218-4472-9c47-fda281dfd53c",
+        "169872af-f357-4911-b355-758c42fcc2e1",
+        "43e27ebd-421b-4b89-8d52-d0362eea296d",
+        "2ad7b45c-a564-4730-a90f-fc28d3dda5cb",
+        "da7be02a-2b18-4f96-9754-77e680b78856",
+        "831d7770-1df8-43db-b95b-4a76416ad05a",
+        "16c33290-61d6-4eb0-9834-3cc5b66a2ba8",
+        "5c460edb-97dc-4807-95ca-f194405ab1d5",
+        "ea2db382-5c30-43b0-af25-aae21e7e3cf7",
+        "af436b3a-7ac6-480c-bd7f-2ea4fd66597d",
+        "92bfe3f8-21fb-46f9-b8c0-c4671f83c13c",
+        "66242fb7-7dca-4acf-914b-953351626d9c",
+        "5a308c34-3afd-4e3b-a847-75ba2987afe6",
+        "03f4441d-5a1e-4811-af95-51b42252a585",
+        "f7363e73-1e73-45f7-bf53-54867a582ecb",
+        "b5249f9a-3fef-4dca-950d-8bcd74b89f97",
+        "3b254d7e-243e-48a7-bd8a-d316e84b9d60",
+        "db9ffc6d-dede-4a40-8b0c-01cad072eb12",
+        "f08704c3-0d72-4328-b613-b0d43b1bd7c2",
+        "d03c6181-3a8c-4066-a9a1-b97284e546b0",
+        "45efe2c7-7d7b-42fa-b36a-a84b4920aa0d",
+        "0029d1e3-9e4d-4ae9-a75e-9ec58e21e993",
+        "fa15fe3e-d215-43b1-8144-c97b7414ae4d",
+        "41e6d1f8-207b-4e62-9265-51874ca15816",
+        "f21a735c-37c3-4270-8b75-ec7274131475",
+        "b6d5d56f-8fdc-45dd-8632-14c6bce04428",
+        "f6e8308c-8a2a-4913-9d36-90c43af59df5"
+      ],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T20:51:38.598331+00:00",
+      "not_before": "2025-11-18T20:53:08.598336+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T20:57:23.578367+00:00",
+      "last_error": null
+    },
+    {
+      "id": "4b269131-8358-4e94-b4f8-ac36ed1e3af2",
+      "principal": "Test.Employee123@amanomcgann.com",
+      "sku_id": "05e9a617-0261-4cee-bb44-138d3ef5d965",
+      "principal_candidates": [
+        "Test.Employee123"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T21:11:40.918481+00:00",
+      "not_before": "2025-11-18T21:13:10.918486+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T21:13:40.848933+00:00",
+      "last_error": null
+    },
+    {
+      "id": "4b21595c-5e2d-4013-9a6f-8ca349528da9",
+      "principal": "Test.Employee123@amanomcgann.com",
+      "sku_id": "1c27243e-fb4d-42b1-ae8c-fe25c9616588",
+      "principal_candidates": [
+        "Test.Employee123"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T21:11:40.923661+00:00",
+      "not_before": "2025-11-18T21:13:10.923667+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T21:13:46.252073+00:00",
+      "last_error": null
+    },
+    {
+      "id": "4d40d923-9145-4322-bd58-34e95d04c1be",
+      "principal": "Test.Employee123@amanomcgann.com",
+      "sku_id": "",
+      "principal_candidates": [
+        "Test.Employee123"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [
+        "ab7ba0a8-f965-4293-9e4a-22e2a379984c",
+        "3b46ed42-6071-42f1-9a15-94947cc67e3b",
+        "df64febe-811b-4c98-b20f-5ababdf70b62",
+        "3194a9ef-3084-469e-ae04-77812342ee60",
+        "deb6fd6a-3140-4a3b-a8bd-78200e46f305",
+        "0f2d6fb1-b48c-48cc-85da-ddd2a2f255d3",
+        "b76f41cb-f113-4194-8cac-ebfb0ed8e4e5",
+        "641e2fe6-a6cb-4ff8-a8fd-312a22f0d4f4",
+        "7a46c751-47d8-4583-ae7b-e645ef612043",
+        "ce878080-1625-42a0-85f2-332a09a32a9d",
+        "1c7bd623-6cd6-422d-8657-329b293f52c4",
+        "5c460edb-97dc-4807-95ca-f194405ab1d5",
+        "0e1d767d-5e84-4c14-86cf-0d21dce4fc8d",
+        "af436b3a-7ac6-480c-bd7f-2ea4fd66597d",
+        "0d1e6da8-43d3-44f4-aeab-c982a0f48c83"
+      ],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T21:11:40.928874+00:00",
+      "not_before": "2025-11-18T21:13:10.928878+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T21:15:07.107054+00:00",
+      "last_error": null
+    },
+    {
+      "id": "61a4e3a9-5d65-49e5-9264-04da4c674dc9",
+      "principal": "Test.Employee40@amanomcgann.com",
+      "sku_id": "05e9a617-0261-4cee-bb44-138d3ef5d965",
+      "principal_candidates": [
+        "Test.Employee40"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T21:22:15.195895+00:00",
+      "not_before": "2025-11-18T21:23:45.195899+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T21:25:15.056077+00:00",
+      "last_error": null
+    },
+    {
+      "id": "37eed342-3187-4a96-8708-264c20334daf",
+      "principal": "Test.Employee40@amanomcgann.com",
+      "sku_id": "1c27243e-fb4d-42b1-ae8c-fe25c9616588",
+      "principal_candidates": [
+        "Test.Employee40"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T21:22:15.199955+00:00",
+      "not_before": "2025-11-18T21:23:45.199958+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T21:25:20.404019+00:00",
+      "last_error": null
+    },
+    {
+      "id": "84f79ee3-c337-4cf3-94cd-ad554a7774b2",
+      "principal": "Test.Employee40@amanomcgann.com",
+      "sku_id": "",
+      "principal_candidates": [
+        "Test.Employee40"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [
+        "ab7ba0a8-f965-4293-9e4a-22e2a379984c",
+        "3b46ed42-6071-42f1-9a15-94947cc67e3b",
+        "df64febe-811b-4c98-b20f-5ababdf70b62",
+        "3194a9ef-3084-469e-ae04-77812342ee60",
+        "deb6fd6a-3140-4a3b-a8bd-78200e46f305",
+        "0f2d6fb1-b48c-48cc-85da-ddd2a2f255d3",
+        "b76f41cb-f113-4194-8cac-ebfb0ed8e4e5",
+        "641e2fe6-a6cb-4ff8-a8fd-312a22f0d4f4",
+        "7a46c751-47d8-4583-ae7b-e645ef612043",
+        "ce878080-1625-42a0-85f2-332a09a32a9d",
+        "1c7bd623-6cd6-422d-8657-329b293f52c4",
+        "5c460edb-97dc-4807-95ca-f194405ab1d5",
+        "0e1d767d-5e84-4c14-86cf-0d21dce4fc8d",
+        "af436b3a-7ac6-480c-bd7f-2ea4fd66597d",
+        "0d1e6da8-43d3-44f4-aeab-c982a0f48c83"
+      ],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T21:22:15.205800+00:00",
+      "not_before": "2025-11-18T21:23:45.205805+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T21:26:55.272483+00:00",
+      "last_error": null
+    },
+    {
+      "id": "d23298c6-0607-43c0-8b50-735c2f937302",
+      "principal": "Test.Employee4@amanomcgann.com",
+      "sku_id": "05e9a617-0261-4cee-bb44-138d3ef5d965",
+      "principal_candidates": [
+        "Test.Employee4"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T21:45:11.008534+00:00",
+      "not_before": "2025-11-18T21:46:41.008538+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T21:47:46.728762+00:00",
+      "last_error": null
+    },
+    {
+      "id": "4c1b79bf-1b30-4280-ba11-dff91156824d",
+      "principal": "Test.Employee4@amanomcgann.com",
+      "sku_id": "1c27243e-fb4d-42b1-ae8c-fe25c9616588",
+      "principal_candidates": [
+        "Test.Employee4"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T21:45:11.012784+00:00",
+      "not_before": "2025-11-18T21:46:41.012789+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T21:47:52.118544+00:00",
+      "last_error": null
+    },
+    {
+      "id": "80af7fe7-c5e7-41ac-82fa-cc11719ebab0",
+      "principal": "Test.Employee4@amanomcgann.com",
+      "sku_id": "",
+      "principal_candidates": [
+        "Test.Employee4"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [
+        "ab7ba0a8-f965-4293-9e4a-22e2a379984c",
+        "3b46ed42-6071-42f1-9a15-94947cc67e3b",
+        "df64febe-811b-4c98-b20f-5ababdf70b62",
+        "3194a9ef-3084-469e-ae04-77812342ee60",
+        "deb6fd6a-3140-4a3b-a8bd-78200e46f305",
+        "0f2d6fb1-b48c-48cc-85da-ddd2a2f255d3",
+        "b76f41cb-f113-4194-8cac-ebfb0ed8e4e5",
+        "641e2fe6-a6cb-4ff8-a8fd-312a22f0d4f4",
+        "7a46c751-47d8-4583-ae7b-e645ef612043",
+        "ce878080-1625-42a0-85f2-332a09a32a9d",
+        "1c7bd623-6cd6-422d-8657-329b293f52c4",
+        "5c460edb-97dc-4807-95ca-f194405ab1d5",
+        "0e1d767d-5e84-4c14-86cf-0d21dce4fc8d",
+        "af436b3a-7ac6-480c-bd7f-2ea4fd66597d",
+        "0d1e6da8-43d3-44f4-aeab-c982a0f48c83"
+      ],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T21:45:11.018974+00:00",
+      "not_before": "2025-11-18T21:46:41.018980+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T21:49:15.131716+00:00",
+      "last_error": null
+    },
+    {
+      "id": "9d4ae0d0-3ef7-4d5f-9334-85289713a60c",
+      "principal": "Test.100@amanomcgann.com",
+      "sku_id": "05e9a617-0261-4cee-bb44-138d3ef5d965",
+      "principal_candidates": [
+        "Test.100"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T22:04:33.734156+00:00",
+      "not_before": "2025-11-18T22:06:03.734162+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T22:07:17.541893+00:00",
+      "last_error": null
+    },
+    {
+      "id": "cb5636d5-69b1-4c77-8d41-19cb3581f45e",
+      "principal": "Test.100@amanomcgann.com",
+      "sku_id": "1c27243e-fb4d-42b1-ae8c-fe25c9616588",
+      "principal_candidates": [
+        "Test.100"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T22:04:33.740530+00:00",
+      "not_before": "2025-11-18T22:06:03.740563+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T22:07:23.158912+00:00",
+      "last_error": null
+    },
+    {
+      "id": "0c20517c-b7dd-4893-9faa-1f6ba351c87d",
+      "principal": "Test.100@amanomcgann.com",
+      "sku_id": "",
+      "principal_candidates": [
+        "Test.100"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [
+        "ab7ba0a8-f965-4293-9e4a-22e2a379984c",
+        "3b46ed42-6071-42f1-9a15-94947cc67e3b",
+        "df64febe-811b-4c98-b20f-5ababdf70b62",
+        "3194a9ef-3084-469e-ae04-77812342ee60",
+        "deb6fd6a-3140-4a3b-a8bd-78200e46f305",
+        "0f2d6fb1-b48c-48cc-85da-ddd2a2f255d3",
+        "b76f41cb-f113-4194-8cac-ebfb0ed8e4e5",
+        "641e2fe6-a6cb-4ff8-a8fd-312a22f0d4f4",
+        "7a46c751-47d8-4583-ae7b-e645ef612043",
+        "ce878080-1625-42a0-85f2-332a09a32a9d",
+        "1c7bd623-6cd6-422d-8657-329b293f52c4",
+        "5c460edb-97dc-4807-95ca-f194405ab1d5",
+        "0e1d767d-5e84-4c14-86cf-0d21dce4fc8d",
+        "af436b3a-7ac6-480c-bd7f-2ea4fd66597d",
+        "0d1e6da8-43d3-44f4-aeab-c982a0f48c83"
+      ],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T22:04:33.746403+00:00",
+      "not_before": "2025-11-18T22:06:03.746410+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T22:08:54.044034+00:00",
+      "last_error": null
+    },
+    {
+      "id": "f0302328-efe8-448b-bdc1-821934e44744",
+      "principal": "Test.102@amanomcgann.com",
+      "sku_id": "05e9a617-0261-4cee-bb44-138d3ef5d965",
+      "principal_candidates": [
+        "Test.102"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T22:26:56.166428+00:00",
+      "not_before": "2025-11-18T22:28:26.166434+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T22:29:49.638896+00:00",
+      "last_error": null
+    },
+    {
+      "id": "43cf7459-a57f-4a65-b71c-fe28ff09ec1b",
+      "principal": "Test.102@amanomcgann.com",
+      "sku_id": "f30db892-07e9-47e9-837c-80727f46fd3d",
+      "principal_candidates": [
+        "Test.102"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T22:26:56.174944+00:00",
+      "not_before": "2025-11-18T22:28:26.174951+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T22:30:20.036269+00:00",
+      "last_error": null
+    },
+    {
+      "id": "b50446e1-a6ae-4b94-b3d1-99b9a1cb2eba",
+      "principal": "Test.102@amanomcgann.com",
+      "sku_id": "",
+      "principal_candidates": [
+        "Test.102"
+      ],
+      "disabled_plans": [],
+      "azure_groups": [
+        "3aa5187e-f031-4e22-8734-8cab0cc410cb",
+        "aee5e306-b0fa-45ff-9993-5d78bc5752da",
+        "245a2b3d-371c-4465-95b7-3c83783b2552",
+        "9c679503-9ab0-40e5-967f-88176ced3ad7",
+        "5c460edb-97dc-4807-95ca-f194405ab1d5",
+        "0d1e6da8-43d3-44f4-aeab-c982a0f48c83",
+        "f08704c3-0d72-4328-b613-b0d43b1bd7c2",
+        "a56bc0a9-375a-40bb-99f6-bef1139c67cb",
+        "fa15fe3e-d215-43b1-8144-c97b7414ae4d"
+      ],
+      "status": "completed",
+      "attempts": 0,
+      "created_at": "2025-11-18T22:26:56.181806+00:00",
+      "not_before": "2025-11-18T22:28:26.181812+00:00",
+      "last_attempt_at": null,
+      "completed_at": "2025-11-18T22:31:15.603138+00:00",
+      "last_error": null
+    }
+  ]
 }

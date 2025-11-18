@@ -28,9 +28,15 @@
             <td>{{ user.get('sAMAccountName') }}</td>
             <td>{{ user.get('mail') }}</td>
             <td>
-              <form method="post" onsubmit="return confirm('Delete {{ user.get('displayName') or user.get('distinguishedName') }}? This cannot be undone.');">
+              <form method="post" style="display:inline-block;" onsubmit="return confirm('Offboard {{ user.get('displayName') or user.get('distinguishedName') }}? This will convert mailbox to shared, forward to manager, remove licenses/groups, and block sign-in.');">
                 <input type="hidden" name="user_dn" value="{{ user.get('distinguishedName') }}" />
-                <button type="submit">Delete &amp; Sync</button>
+                <input type="hidden" name="action" value="offboard" />
+                <button type="submit" class="button">Offboard</button>
+              </form>
+              <form method="post" style="display:inline-block; margin-left:0.5rem;" onsubmit="return confirm('Permanently delete {{ user.get('displayName') or user.get('distinguishedName') }}? This cannot be undone.');">
+                <input type="hidden" name="user_dn" value="{{ user.get('distinguishedName') }}" />
+                <input type="hidden" name="action" value="delete" />
+                <button type="submit" class="button secondary">Delete</button>
               </form>
             </td>
           </tr>

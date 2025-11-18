@@ -1,18 +1,63 @@
 roles:
-- name: Software Engineer
-  description: Development team member
-  user_ou: OU=Engineering,OU=Employees,DC=example,DC=com
-  default_manager_dn: CN=Engineering Manager,OU=Managers,DC=example,DC=com
+- name: Operations Manager
+  description: null
+  user_ou: CN=Users,DC=amanomcgann,DC=com
+  default_manager_dn: CN=Rick Bruner,CN=Users,DC=amanomcgann,DC=com
   attributes:
-    title: Software Engineer
-    department: Engineering
-    company: Example Corp
+    title: Operations Manager
+    department: New Jersey Field Service
+    company: Amano McGann Inc
+    physicalDeliveryOfficeName: New Jersey
   groups:
-  - CN=SG-Developers,OU=Groups,DC=example,DC=com
-  - CN=SG-AllStaff,OU=Groups,DC=example,DC=com
-  - a1b2c3d4-e5f6-7890-abcd-ef1234567890
+  - CN=SG-ERP-USERS,OU=User Groups,DC=amanomcgann,DC=com
+  - CN=SG-GPREPORTS,OU=User Groups,DC=amanomcgann,DC=com
+  - CN=SG_Admin_Files_Members,OU=User Groups,DC=amanomcgann,DC=com
+  - ab7ba0a8-f965-4293-9e4a-22e2a379984c
+  - 3b46ed42-6071-42f1-9a15-94947cc67e3b
+  - df64febe-811b-4c98-b20f-5ababdf70b62
+  - 3194a9ef-3084-469e-ae04-77812342ee60
+  - deb6fd6a-3140-4a3b-a8bd-78200e46f305
+  - 0f2d6fb1-b48c-48cc-85da-ddd2a2f255d3
+  - b76f41cb-f113-4194-8cac-ebfb0ed8e4e5
+  - 641e2fe6-a6cb-4ff8-a8fd-312a22f0d4f4
+  - 7a46c751-47d8-4583-ae7b-e645ef612043
+  - ce878080-1625-42a0-85f2-332a09a32a9d
+  - 1c7bd623-6cd6-422d-8657-329b293f52c4
+  - 5c460edb-97dc-4807-95ca-f194405ab1d5
+  - 0e1d767d-5e84-4c14-86cf-0d21dce4fc8d
+  - af436b3a-7ac6-480c-bd7f-2ea4fd66597d
+  - 0d1e6da8-43d3-44f4-aeab-c982a0f48c83
+  licenses:
+  - sku_id: 1c27243e-fb4d-42b1-ae8c-fe25c9616588
+    disabled_plans: []
+  - sku_id: 05e9a617-0261-4cee-bb44-138d3ef5d965
+    disabled_plans: []
+  license_sku_id: 1c27243e-fb4d-42b1-ae8c-fe25c9616588
+  disabled_service_plans: []
+- name: Sales Engineer
+  description: null
+  user_ou: CN=Users,DC=amanomcgann,DC=com
+  default_manager_dn: CN=Collin Schulz,CN=Users,DC=amanomcgann,DC=com
+  attributes:
+    title: Sales Engineer
+    department: Product Management
+    company: Amano McGann Inc
+    physicalDeliveryOfficeName: AMI Corporate
+  groups:
+  - CN=SG-DEPT-BA,OU=User Groups,DC=amanomcgann,DC=com
+  - 3aa5187e-f031-4e22-8734-8cab0cc410cb
+  - aee5e306-b0fa-45ff-9993-5d78bc5752da
+  - 245a2b3d-371c-4465-95b7-3c83783b2552
+  - 9c679503-9ab0-40e5-967f-88176ced3ad7
+  - 5c460edb-97dc-4807-95ca-f194405ab1d5
+  - 0d1e6da8-43d3-44f4-aeab-c982a0f48c83
+  - f08704c3-0d72-4328-b613-b0d43b1bd7c2
+  - a56bc0a9-375a-40bb-99f6-bef1139c67cb
+  - fa15fe3e-d215-43b1-8144-c97b7414ae4d
   licenses:
   - sku_id: 05e9a617-0261-4cee-bb44-138d3ef5d965
+    disabled_plans: []
+  - sku_id: f30db892-07e9-47e9-837c-80727f46fd3d
     disabled_plans: []
   license_sku_id: 05e9a617-0261-4cee-bb44-138d3ef5d965
   disabled_service_plans: []

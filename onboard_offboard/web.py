@@ -1590,8 +1590,33 @@ def register_routes(app: Flask) -> None:
 
         if request.method == "POST":
             user_dn = request.form.get("user_dn")
+            action = request.form.get("action", "delete")
             if not user_dn:
-                flash("Select a user to delete.", "error")
+                flash("Select a user to process.", "error")
+            elif action == "offboard":
+                try:
+                    user_info = None
+                    with ADClient(config.ldap) as client:
+                        user_info = client.get_user(user_dn, attributes=["displayName", "mail", "userPrincipalName", "sAMAccountName", "manager"])
+                        deleted = client.delete_user(user_dn)
+                    if not deleted:
+                        raise RuntimeError("User was not deleted from AD.")
+                    
+                    _trigger_sync(config)
+                    
+                    if config.m365.has_credentials and user_info:
+                        flash(f"Offboarding started for {user_info.get('displayName')}. This process will take several minutes to complete in the background.", "info")
+                        threading.Thread(
+                            target=_offboard_m365_user_background,
+                            args=(app, config, user_info),
+                            daemon=True
+                        ).start()
+                    else:
+                        flash("User offboarded from AD. M365 integration not configured.", "success")
+                    
+                    return redirect(url_for("delete_user"))
+                except Exception as exc:
+                    flash(f"Unable to offboard user: {exc}", "error")
             else:
                 try:
                     with ADClient(config.ldap) as client:
@@ -1599,7 +1624,7 @@ def register_routes(app: Flask) -> None:
                     if not deleted:
                         raise RuntimeError("User was not deleted.")
                     _trigger_sync(config)
-                    flash(f"Removed {user_dn} and triggered sync.", "success")
+                    flash(f"Permanently deleted {user_dn} and triggered sync.", "success")
                     return redirect(url_for("delete_user"))
                 except Exception as exc:
                     flash(f"Unable to delete user: {exc}", "error")
@@ -2267,13 +2292,13 @@ def _process_license_job(
             client.update_user(user_id, usageLocation=default_usage_location)
             usage_location = default_usage_location
             print(f"  SUCCESS: Set usageLocation={default_usage_location}")
-            print(f"  Waiting 15 seconds for Azure to process...")
+            print(f"  Waiting 30 seconds for Azure to process...")
             app.logger.info(
                 "Set usageLocation=%s for %s prior to license/group assignment.",
                 default_usage_location,
                 lookup,
             )
-            time.sleep(15)
+            time.sleep(30)
         except M365ClientError as exc:
             print(f"  FAILED: {exc}")
             if "does not exist" in str(exc).lower() or "not found" in str(exc).lower():
@@ -2606,6 +2631,372 @@ def _trigger_sync(config: AppConfig) -> None:
         flash(f"Directory sync reported a problem: {exc}", "error")
 
 
+def _offboard_m365_user_background(app: Flask, config: AppConfig, user_info: Dict[str, Any]) -> None:
+    """Background thread wrapper for M365 offboarding."""
+    with app.app_context():
+        try:
+            _offboard_m365_user(app, config, user_info)
+        except Exception as exc:
+            app.logger.exception("Background M365 offboarding failed: %s", exc)
+
+
+def _offboard_m365_user(app: Flask, config: AppConfig, user_info: Dict[str, Any]) -> None:
+    """Comprehensive M365 offboarding: restore, assign license, wait for mailbox, convert to shared, remove licenses/groups, block sign-in, rename."""
+    import time
+    from datetime import datetime
+    
+    client = _get_m365_client(app, config)
+    if not client:
+        raise RuntimeError("M365 client not available")
+    
+    lookup = (user_info.get("userPrincipalName") or user_info.get("mail") or "").strip()
+    if not lookup:
+        raise RuntimeError("User has no email/UPN for M365 lookup")
+    
+    app.logger.info("Starting M365 offboarding for %s", lookup)
+    print(f"\n=== M365 OFFBOARDING: {lookup} ===")
+    print("Waiting 90s for AD sync to complete...")
+    time.sleep(90)
+    
+    print("Looking for user in deleted items...")
+    graph_user = None
+    user_id = None
+    
+    try:
+        deleted_users = client._request("GET", "/directory/deletedItems/microsoft.graph.user")
+        for deleted in deleted_users.get("value", []):
+            deleted_upn = (deleted.get("userPrincipalName") or "").lower()
+            deleted_mail = (deleted.get("mail") or "").lower()
+            lookup_lower = lookup.lower()
+            
+            if deleted_upn == lookup_lower or deleted_mail == lookup_lower or lookup_lower in deleted_upn:
+                user_id = deleted["id"]
+                print(f"Found in deleted items: {user_id} (UPN: {deleted.get('userPrincipalName')})")
+                print("Restoring user...")
+                client.restore_user(user_id)
+                print("Waiting for restore to complete...")
+                time.sleep(30)
+                
+                for attempt in range(5):
+                    try:
+                        graph_user = client.get_user(user_id, select="id,userPrincipalName,displayName,mail,manager")
+                        print(f"User restored: {graph_user.get('userPrincipalName')}")
+                        break
+                    except Exception as get_exc:
+                        if attempt < 4:
+                            print(f"  Restore not ready, waiting 10s... (attempt {attempt + 1}/5)")
+                            time.sleep(10)
+                        else:
+                            raise
+                break
+        else:
+            raise RuntimeError(f"User {lookup} not found in M365 deleted items after sync")
+    except Exception as restore_exc:
+        raise RuntimeError(f"Failed to find/restore user: {restore_exc}")
+    
+    display_name = graph_user.get("displayName", "")
+    manager_id = graph_user.get("manager", {}).get("id") if isinstance(graph_user.get("manager"), dict) else None
+    manager_email = None
+    
+    if not manager_id and user_info.get("manager"):
+        manager_dn = user_info["manager"]
+        try:
+            with ADClient(config.ldap) as ad_client:
+                manager_info = ad_client.get_user(manager_dn, attributes=["mail", "userPrincipalName"])
+                manager_lookup = manager_info.get("userPrincipalName") or manager_info.get("mail")
+                if manager_lookup:
+                    manager_user = client.find_user(manager_lookup, select="id,mail")
+                    if manager_user:
+                        manager_id = manager_user["id"]
+                        manager_email = manager_user.get("mail")
+        except Exception:
+            pass
+    
+    if manager_id and not manager_email:
+        try:
+            manager_user = client.get_user(manager_id, select="mail")
+            manager_email = manager_user.get("mail")
+        except Exception:
+            pass
+    
+    print(f"Manager: {manager_email or 'Not found'}")
+    
+    user_licenses = []
+    try:
+        current_user = client.get_user(user_id, select="assignedLicenses")
+        user_licenses = current_user.get("assignedLicenses", [])
+        print(f"User has {len(user_licenses)} licenses")
+    except Exception as lic_check_exc:
+        print(f"  Could not check licenses: {lic_check_exc}")
+    
+    if not user_licenses:
+        print("No licenses found, assigning temporary E3 license for mailbox access...")
+        try:
+            if not client.get_user(user_id, select="usageLocation").get("usageLocation"):
+                client.update_user(user_id, usageLocation=config.m365.default_usage_location or "US")
+                time.sleep(15)
+            client.assign_license(user_id, "05e9a617-0261-4cee-bb44-138d3ef5d965", [])
+            print("  Assigned E3 license, waiting 120s for mailbox provisioning...")
+            time.sleep(120)
+        except Exception as temp_lic_exc:
+            print(f"  Could not assign temporary license: {temp_lic_exc}")
+    else:
+        print("Licenses present, waiting 90s for mailbox to be fully ready...")
+        time.sleep(90)
+    
+    print("Checking mailbox status...")
+    mailbox_ready = False
+    for check_attempt in range(5):
+        try:
+            result = _check_mailbox_exists(app, config, lookup)
+            if result:
+                print(f"  Mailbox confirmed ready")
+                mailbox_ready = True
+                break
+        except Exception as check_exc:
+            print(f"  Check attempt {check_attempt + 1}/5: {check_exc}")
+        if check_attempt < 4:
+            print(f"  Waiting 30s before next check...")
+            time.sleep(30)
+    
+    if not mailbox_ready:
+        print("  WARNING: Could not confirm mailbox is ready, proceeding anyway...")
+    
+    if config.m365.has_exo_credentials and manager_email:
+        print("Converting mailbox to shared and setting up forwarding...")
+        for attempt in range(5):
+            try:
+                _convert_mailbox_to_shared_and_forward(app, config, lookup, manager_email)
+                print("  SUCCESS: Mailbox converted and forwarding enabled")
+                break
+            except Exception as mb_exc:
+                if attempt < 4:
+                    print(f"  Attempt {attempt + 1} failed, waiting 45s and retrying...")
+                    time.sleep(45)
+                else:
+                    print(f"  FAILED after 5 attempts: {mb_exc}")
+                    app.logger.error("Mailbox conversion failed for %s: %s", lookup, mb_exc)
+    else:
+        print("Skipping mailbox conversion (Exchange Online not configured or no manager)")
+    
+    print("Removing all licenses...")
+    try:
+        client.remove_all_licenses(user_id)
+        print("  SUCCESS: All licenses removed")
+    except Exception as lic_exc:
+        print(f"  FAILED: {lic_exc}")
+        app.logger.error("License removal failed for %s: %s", lookup, lic_exc)
+    
+    print("Removing all group memberships...")
+    removed_count = 0
+    try:
+        group_ids = client.get_user_groups(user_id)
+        print(f"  Found {len(group_ids)} groups to process")
+        
+        for idx, group_id in enumerate(group_ids, 1):
+            print(f"\n  Group {idx}/{len(group_ids)}: {group_id}")
+            try:
+                group_details = client.get_group(group_id)
+                group_name = group_details.get("displayName") or group_id
+                on_prem_synced = group_details.get("onPremisesSyncEnabled")
+                mail_enabled = group_details.get("mailEnabled")
+                security_enabled = group_details.get("securityEnabled")
+                group_types = group_details.get("groupTypes") or []
+                membership_rule = group_details.get("membershipRule")
+                
+                print(f"    Name: {group_name}")
+                print(f"    OnPremSync: {on_prem_synced}, Mail: {mail_enabled}, Security: {security_enabled}")
+                print(f"    Types: {group_types}, Dynamic: {bool(membership_rule)}")
+                
+                if on_prem_synced:
+                    print(f"    SKIPPED: On-premises synced (managed in AD)")
+                    app.logger.warning(
+                        "SKIPPED: On-premises synced group %s (%s) - must be managed in AD",
+                        group_name,
+                        group_id,
+                    )
+                    continue
+                
+                if membership_rule or "DynamicMembership" in group_types:
+                    print(f"    SKIPPED: Dynamic group (rule-based membership)")
+                    app.logger.warning(
+                        "SKIPPED: Dynamic group %s (%s) - membership is rule-based",
+                        group_name,
+                        group_id,
+                    )
+                    continue
+                
+                is_distribution_list = mail_enabled and not security_enabled and "Unified" not in group_types
+                if is_distribution_list:
+                    if config.m365.has_exo_credentials:
+                        print(f"    Removing from Distribution List via Exchange Online...")
+                        try:
+                            _remove_from_distribution_list(app, config, lookup, group_id)
+                            print(f"    SUCCESS: Removed from DL {group_name}")
+                            removed_count += 1
+                            app.logger.info("Removed %s from distribution list %s via Exchange Online.", lookup, group_name)
+                        except Exception as dl_exc:
+                            print(f"    FAILED: {dl_exc}")
+                            app.logger.error("Failed to remove %s from DL %s: %s", lookup, group_name, dl_exc)
+                    else:
+                        print(f"    SKIPPED: Distribution list (Exchange Online not configured)")
+                        app.logger.warning(
+                            "SKIPPED: Distribution list %s (%s) - Exchange Online credentials not configured",
+                            group_name,
+                            group_id,
+                        )
+                    continue
+                
+                print(f"    Removing user from group...")
+                client.remove_user_from_group(user_id, group_id)
+                print(f"    SUCCESS: Removed from {group_name}")
+                removed_count += 1
+                app.logger.info("Successfully removed %s from Azure group %s (%s).", lookup, group_name, group_id)
+            except M365ClientError as exc:
+                print(f"    FAILED: {exc}")
+                app.logger.error(
+                    "FAILED to remove %s from Azure group %s: %s",
+                    lookup,
+                    group_id,
+                    exc,
+                )
+            except Exception as exc:
+                print(f"    UNEXPECTED ERROR: {exc}")
+                app.logger.exception(
+                    "Unexpected error removing %s from Azure group %s: %s",
+                    lookup,
+                    group_id,
+                    exc,
+                )
+        
+        print(f"\n  COMPLETE: Removed from {removed_count}/{len(group_ids)} groups")
+    except Exception as grp_exc:
+        print(f"  FAILED: {grp_exc}")
+        app.logger.error("Group removal failed for %s: %s", lookup, grp_exc)
+    
+    print("Blocking sign-in...")
+    try:
+        client.block_sign_in(user_id)
+        print("  SUCCESS: Sign-in blocked")
+    except Exception as block_exc:
+        print(f"  FAILED: {block_exc}")
+        app.logger.error("Block sign-in failed for %s: %s", lookup, block_exc)
+    
+    now = datetime.now()
+    offboard_date = f"{now.month}.{now.day:02d}.{now.strftime('%y')}"
+    new_display_name = f"FE_{display_name} {offboard_date}"
+    print(f"Renaming user and clearing all contact/organization info...")
+    print(f"  New display name: {new_display_name}")
+    try:
+        payload = {
+            "displayName": new_display_name,
+            "givenName": None,
+            "surname": None,
+            "jobTitle": None,
+            "department": None,
+            "companyName": None,
+            "officeLocation": None,
+            "businessPhones": [],
+            "mobilePhone": None,
+            "faxNumber": None,
+            "streetAddress": None,
+            "city": None,
+            "state": None,
+            "postalCode": None,
+            "country": None,
+        }
+        client._request("PATCH", f"/users/{user_id}", json=payload)
+        print("  SUCCESS: User renamed and all contact/organization info cleared")
+    except Exception as rename_exc:
+        print(f"  FAILED: {rename_exc}")
+        app.logger.error("Rename/clear failed for %s: %s", lookup, rename_exc)
+    
+    print(f"=== OFFBOARDING COMPLETE ===")
+    app.logger.info("M365 offboarding completed for %s", lookup)
+
+
+def _check_mailbox_exists(
+    app: Flask,
+    config: AppConfig,
+    user_email: str,
+) -> bool:
+    """Check if mailbox exists and is ready using Exchange Online PowerShell."""
+    ps5_path = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    
+    script = f"""$env:PSModulePath = [System.Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
+Import-Module ExchangeOnlineManagement -ErrorAction Stop
+$ErrorActionPreference = 'Stop'
+try {{
+    Connect-ExchangeOnline -AppId '{config.m365.client_id}' -CertificateThumbprint '{config.m365.cert_thumbprint}' -Organization '{config.m365.exo_organization}' -ShowBanner:$false -ErrorAction Stop
+    
+    $mailbox = Get-Mailbox -Identity '{user_email}' -ErrorAction Stop
+    if ($mailbox) {{
+        Write-Output 'MAILBOX_EXISTS'
+    }}
+}} catch {{
+    Write-Error $_.Exception.Message
+    exit 1
+}} finally {{
+    try {{ Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+}}"""
+    
+    env = os.environ.copy()
+    env.pop('PSModulePath', None)
+    
+    result = subprocess.run(
+        [ps5_path, "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    
+    return result.returncode == 0 and "MAILBOX_EXISTS" in result.stdout
+
+
+def _convert_mailbox_to_shared_and_forward(
+    app: Flask,
+    config: AppConfig,
+    user_email: str,
+    manager_email: str,
+) -> None:
+    """Convert mailbox to shared, hide from GAL, and forward to manager using Exchange Online PowerShell."""
+    ps5_path = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    
+    script = f"""$env:PSModulePath = [System.Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
+Import-Module ExchangeOnlineManagement -ErrorAction Stop
+$ErrorActionPreference = 'Stop'
+try {{
+    Connect-ExchangeOnline -AppId '{config.m365.client_id}' -CertificateThumbprint '{config.m365.cert_thumbprint}' -Organization '{config.m365.exo_organization}' -ShowBanner:$false -ErrorAction Stop
+    
+    Set-Mailbox -Identity '{user_email}' -Type Shared -ErrorAction Stop
+    Set-Mailbox -Identity '{user_email}' -HiddenFromAddressListsEnabled $true -ErrorAction Stop
+    Set-Mailbox -Identity '{user_email}' -ForwardingAddress '{manager_email}' -DeliverToMailboxAndForward $false -ErrorAction Stop
+    
+    Write-Output 'SUCCESS'
+}} catch {{
+    Write-Error $_.Exception.Message
+    exit 1
+}} finally {{
+    try {{ Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+}}"""
+    
+    env = os.environ.copy()
+    env.pop('PSModulePath', None)
+    
+    result = subprocess.run(
+        [ps5_path, "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        env=env,
+    )
+    
+    if result.returncode != 0 or "SUCCESS" not in result.stdout:
+        error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+        raise RuntimeError(f"Exchange command failed: {error_msg}")
+
+
 def _add_to_distribution_list(
     app: Flask,
     config: AppConfig,
@@ -2624,6 +3015,49 @@ try {{
     $groupEmail = $group.PrimarySmtpAddress
     
     Add-DistributionGroupMember -Identity $groupEmail -Member '{user_email}' -ErrorAction Stop
+    Write-Output 'SUCCESS'
+}} catch {{
+    Write-Error $_.Exception.Message
+    exit 1
+}} finally {{
+    try {{ Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
+}}"""
+    
+    env = os.environ.copy()
+    env.pop('PSModulePath', None)
+    
+    result = subprocess.run(
+        [ps5_path, "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        env=env,
+    )
+    
+    if result.returncode != 0 or "SUCCESS" not in result.stdout:
+        error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+        raise RuntimeError(f"Exchange command failed: {error_msg}")
+
+
+def _remove_from_distribution_list(
+    app: Flask,
+    config: AppConfig,
+    user_email: str,
+    group_id: str,
+) -> None:
+    """Remove user from Distribution List using Exchange Online PowerShell."""
+    ps5_path = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+    
+    script = f"""$env:PSModulePath = [System.Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
+Import-Module ExchangeOnlineManagement -ErrorAction Stop
+$ErrorActionPreference = 'Stop'
+try {{
+    Connect-ExchangeOnline -AppId '{config.m365.client_id}' -CertificateThumbprint '{config.m365.cert_thumbprint}' -Organization '{config.m365.exo_organization}' -ShowBanner:$false -ErrorAction Stop
+    
+    $group = Get-DistributionGroup -Identity '{group_id}' -ErrorAction Stop
+    $groupEmail = $group.PrimarySmtpAddress
+    
+    Remove-DistributionGroupMember -Identity $groupEmail -Member '{user_email}' -Confirm:$false -ErrorAction Stop
     Write-Output 'SUCCESS'
 }} catch {{
     Write-Error $_.Exception.Message

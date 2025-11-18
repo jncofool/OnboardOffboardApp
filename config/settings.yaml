@@ -1,9 +1,9 @@
 ldap:
-  server_uri: mock://demo
-  user_dn: CN=ServiceAccount,CN=Users,DC=example,DC=com
-  password: ChangeMe123!
+  server_uri: ldaps://dc01.example.com
+  user_dn: CN=svc_onboarding,CN=Users,DC=example,DC=com
+  password: ${ONBOARD_LDAP__PASSWORD}
   base_dn: DC=example,DC=com
-  user_ou: OU=Employees,DC=example,DC=com
+  user_ou: CN=Users,DC=example,DC=com
   use_ssl: true
   manager_search_filter: (&(objectClass=user)(|(title=Manager)(title=Director)))
   manager_attributes:
@@ -12,17 +12,17 @@ ldap:
   - title
   group_search_base: OU=Groups,DC=example,DC=com
 sync:
-  command: echo "Mock sync completed"
-  shell: true
-  timeout: 60
+  command: powershell.exe -Command "Start-ADSyncSyncCycle -PolicyType Delta"
+  shell: false
+  timeout: 180
 storage:
-  job_roles_file: data/job_roles.yaml
-  license_jobs_file: data/license_jobs.json
+  job_roles_file: data\job_roles.yaml
+  license_jobs_file: data\license_jobs.json
 m365:
   tenant_id: 00000000-0000-0000-0000-000000000000
   client_id: 00000000-0000-0000-0000-000000000000
-  client_secret: your_client_secret_here
-  sku_cache_file: data/m365_skus.json
+  client_secret: ${ONBOARD_M365__CLIENT_SECRET}
+  sku_cache_file: data\m365_skus.json
   cache_ttl_minutes: 720
   default_usage_location: US
   cert_thumbprint: 0000000000000000000000000000000000000000
@@ -31,10 +31,9 @@ auth:
   enabled: false
   tenant_id: 00000000-0000-0000-0000-000000000000
   client_id: 00000000-0000-0000-0000-000000000000
-  client_secret: your_auth_client_secret_here
+  client_secret: ${ONBOARD_AUTH__CLIENT_SECRET}
   redirect_uri: http://localhost:5000/auth/callback
-  allowed_groups:
-  - 00000000-0000-0000-0000-000000000000
+  allowed_groups: []
   scopes:
   - https://graph.microsoft.com/User.Read
   - https://graph.microsoft.com/GroupMember.Read.All
