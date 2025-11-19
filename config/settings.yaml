@@ -1,42 +1,40 @@
 ldap:
-  server_uri: ldaps://MN-AD-01.amanomcgann.com
-  user_dn: CN=svc_onboarding Offboarding,CN=Users,DC=amanomcgann,DC=com
+  server_uri: ldaps://dc01.example.com
+  user_dn: CN=svc_onboarding,CN=Users,DC=example,DC=com
   password: ${ONBOARD_LDAP__PASSWORD}
-  base_dn: DC=amanomcgann,DC=com
-  user_ou: CN=Users,DC=amanomcgann,DC=com
+  base_dn: DC=example,DC=com
+  user_ou: OU=Employees,DC=example,DC=com
   use_ssl: true
   manager_search_filter: (&(objectClass=user)(|(title=Manager)(title=Director)))
   manager_attributes:
   - displayName
   - mail
   - title
-  group_search_base: OU=User Groups,DC=amanomcgann,DC=com
+  group_search_base: OU=Groups,DC=example,DC=com
 sync:
-  command: powershell.exe -NoProfile -NonInteractive -Command "Invoke-Command -ComputerName
-    mn-adsync-03.amanomcgann.com -ScriptBlock { Import-Module ADSync; Start-ADSyncSyncCycle
-    -PolicyType Delta }"
+  command: powershell.exe -Command "Start-ADSyncSyncCycle -PolicyType Delta"
   shell: false
   timeout: 180
 storage:
   job_roles_file: data\job_roles.yaml
   license_jobs_file: data\license_jobs.json
 m365:
-  tenant_id: 7c98eced-e44f-40c3-b38b-242eeaebde35
-  client_id: 33a87ac0-5965-4a22-9f5b-e45dd48d5211
+  tenant_id: 00000000-0000-0000-0000-000000000000
+  client_id: 00000000-0000-0000-0000-000000000000
   client_secret: ${ONBOARD_M365__CLIENT_SECRET}
   sku_cache_file: data\m365_skus.json
   cache_ttl_minutes: 720
   default_usage_location: US
-  cert_thumbprint: 124BF450D129E75E40B1DA1DA64122433637FF9E
-  exo_organization: amanomcgann.com
+  cert_thumbprint: 0000000000000000000000000000000000000000
+  exo_organization: example.com
 auth:
   enabled: false
-  tenant_id: 7c98eced-e44f-40c3-b38b-242eeaebde35
-  client_id: 33a87ac0-5965-4a22-9f5b-e45dd48d5211
+  tenant_id: 00000000-0000-0000-0000-000000000000
+  client_id: 00000000-0000-0000-0000-000000000000
   client_secret: ${ONBOARD_AUTH__CLIENT_SECRET}
-  redirect_uri: http://locahost:5000/auth/callback
+  redirect_uri: http://localhost:5000/auth/callback
   allowed_groups:
-  - 09ba685a-0c4c-4921-b8f1-51afa9a30442
+  - 00000000-0000-0000-0000-000000000000
   scopes:
   - https://graph.microsoft.com/User.Read
   - https://graph.microsoft.com/GroupMember.Read.All

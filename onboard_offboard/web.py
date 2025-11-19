@@ -278,10 +278,13 @@ def register_routes(app: Flask) -> None:
 
         if request.method == "POST":
             try:
+                password_input = request.form.get("password", "")
+                ldap_password = password_input if password_input else config.ldap.password
+                
                 ldap = LDAPConfig(
                     server_uri=request.form.get("server_uri", "").strip(),
                     user_dn=request.form.get("user_dn", "").strip(),
-                    password=request.form.get("password", ""),
+                    password=ldap_password,
                     base_dn=request.form.get("base_dn", "").strip(),
                     user_ou=request.form.get("user_ou", "").strip(),
                     use_ssl=request.form.get("use_ssl") == "on",
