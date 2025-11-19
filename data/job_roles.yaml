@@ -1,63 +1,70 @@
 roles:
-- name: Operations Manager
+- name: Director of Product Management
   description: null
   user_ou: CN=Users,DC=amanomcgann,DC=com
-  default_manager_dn: CN=Rick Bruner,CN=Users,DC=amanomcgann,DC=com
+  default_manager_dn: CN=Pat Gibeau,CN=Users,DC=amanomcgann,DC=com
   attributes:
-    title: Operations Manager
-    department: New Jersey Field Service
-    company: Amano McGann Inc
-    physicalDeliveryOfficeName: New Jersey
-  groups:
-  - CN=SG-ERP-USERS,OU=User Groups,DC=amanomcgann,DC=com
-  - CN=SG-GPREPORTS,OU=User Groups,DC=amanomcgann,DC=com
-  - CN=SG_Admin_Files_Members,OU=User Groups,DC=amanomcgann,DC=com
-  - ab7ba0a8-f965-4293-9e4a-22e2a379984c
-  - 3b46ed42-6071-42f1-9a15-94947cc67e3b
-  - df64febe-811b-4c98-b20f-5ababdf70b62
-  - 3194a9ef-3084-469e-ae04-77812342ee60
-  - deb6fd6a-3140-4a3b-a8bd-78200e46f305
-  - 0f2d6fb1-b48c-48cc-85da-ddd2a2f255d3
-  - b76f41cb-f113-4194-8cac-ebfb0ed8e4e5
-  - 641e2fe6-a6cb-4ff8-a8fd-312a22f0d4f4
-  - 7a46c751-47d8-4583-ae7b-e645ef612043
-  - ce878080-1625-42a0-85f2-332a09a32a9d
-  - 1c7bd623-6cd6-422d-8657-329b293f52c4
-  - 5c460edb-97dc-4807-95ca-f194405ab1d5
-  - 0e1d767d-5e84-4c14-86cf-0d21dce4fc8d
-  - af436b3a-7ac6-480c-bd7f-2ea4fd66597d
-  - 0d1e6da8-43d3-44f4-aeab-c982a0f48c83
-  licenses:
-  - sku_id: 1c27243e-fb4d-42b1-ae8c-fe25c9616588
-    disabled_plans: []
-  - sku_id: 05e9a617-0261-4cee-bb44-138d3ef5d965
-    disabled_plans: []
-  license_sku_id: 1c27243e-fb4d-42b1-ae8c-fe25c9616588
-  disabled_service_plans: []
-- name: Sales Engineer
-  description: null
-  user_ou: CN=Users,DC=amanomcgann,DC=com
-  default_manager_dn: CN=Collin Schulz,CN=Users,DC=amanomcgann,DC=com
-  attributes:
-    title: Sales Engineer
+    title: Director of Product Management
     department: Product Management
     company: Amano McGann Inc
     physicalDeliveryOfficeName: AMI Corporate
   groups:
   - CN=SG-DEPT-BA,OU=User Groups,DC=amanomcgann,DC=com
+  - CN=SG-NATIONAL-ReadOnly,OU=User Groups,DC=amanomcgann,DC=com
+  - CN=SG-AUTOCAD,OU=User Groups,DC=amanomcgann,DC=com
+  - CN=SG-McGANN-INSTALLS-Write,OU=User Groups,DC=amanomcgann,DC=com
+  - CN=AMI Copy Room Printer Group,OU=User Groups,DC=amanomcgann,DC=com
+  - 4a37abc6-8090-4385-8db0-bf9b54ee97f5
+  - df64febe-811b-4c98-b20f-5ababdf70b62
+  - 3fb9be66-0c77-4d14-acf7-cb0c56c6c4f2
   - 3aa5187e-f031-4e22-8734-8cab0cc410cb
   - aee5e306-b0fa-45ff-9993-5d78bc5752da
-  - 245a2b3d-371c-4465-95b7-3c83783b2552
+  - 777d748b-d88e-4ddf-a7c9-d8673906d6cf
   - 9c679503-9ab0-40e5-967f-88176ced3ad7
+  - d4f6e6bf-2b69-4c8d-8bb3-54652b81e05b
+  - da7be02a-2b18-4f96-9754-77e680b78856
   - 5c460edb-97dc-4807-95ca-f194405ab1d5
   - 0d1e6da8-43d3-44f4-aeab-c982a0f48c83
   - f08704c3-0d72-4328-b613-b0d43b1bd7c2
   - a56bc0a9-375a-40bb-99f6-bef1139c67cb
+  - 167a2282-ea76-437b-bb99-a1ea058400be
   - fa15fe3e-d215-43b1-8144-c97b7414ae4d
   licenses:
   - sku_id: 05e9a617-0261-4cee-bb44-138d3ef5d965
     disabled_plans: []
+  - sku_id: c5928f49-12ba-48f7-ada3-0d743a3601d5
+    disabled_plans: []
+  - sku_id: a403ebcc-fae0-4ca2-8c8c-7a907fd6c235
+    disabled_plans: []
   - sku_id: f30db892-07e9-47e9-837c-80727f46fd3d
     disabled_plans: []
   license_sku_id: 05e9a617-0261-4cee-bb44-138d3ef5d965
+  disabled_service_plans: []
+- name: Administrative Assistant
+  description: null
+  user_ou: CN=Users,DC=amanomcgann,DC=com
+  default_manager_dn: CN=Berlandie Altidor,CN=Users,DC=amanomcgann,DC=com
+  attributes:
+    title: Administrative Assistant
+    department: '[]'
+    company: Amano McGann Inc
+    physicalDeliveryOfficeName: FTL
+  groups:
+  - CN=SG-ERP-USERS,OU=User Groups,DC=amanomcgann,DC=com
+  - CN=SG-GPREPORTS,OU=User Groups,DC=amanomcgann,DC=com
+  - CN=SG_Admin_Files_Members,OU=User Groups,DC=amanomcgann,DC=com
+  - 8f29cba3-2390-4f8c-9dbc-99a9b7c71ac4
+  - 7a46c751-47d8-4583-ae7b-e645ef612043
+  - ce878080-1625-42a0-85f2-332a09a32a9d
+  - c7cf518d-d655-4650-b327-80b03aeb0cdb
+  - 5c460edb-97dc-4807-95ca-f194405ab1d5
+  - 0d1e6da8-43d3-44f4-aeab-c982a0f48c83
+  - 54ac25bb-5968-4e3f-bc9b-2ae7b730b56b
+  - 05f98b20-b983-41a2-b2c1-5f0aa6a5638f
+  licenses:
+  - sku_id: 0e024cea-e275-472d-a1d3-f7a78df1b833
+    disabled_plans: []
+  - sku_id: 05e9a617-0261-4cee-bb44-138d3ef5d965
+    disabled_plans: []
+  license_sku_id: 0e024cea-e275-472d-a1d3-f7a78df1b833
   disabled_service_plans: []

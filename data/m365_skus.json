@@ -1,5 +1,5 @@
 {
-  "fetched_at": "2025-11-18T20:35:43.302033+00:00",
+  "fetched_at": "2025-11-19T17:44:18.138936+00:00",
   "skus": [
     {
       "id": "7c98eced-e44f-40c3-b38b-242eeaebde35_c5928f49-12ba-48f7-ada3-0d743a3601d5",
@@ -2041,7 +2041,7 @@
       "skuPartNumber": "SPE_E3",
       "capabilityStatus": "Enabled",
       "appliesTo": "User",
-      "consumedUnits": 320,
+      "consumedUnits": 319,
       "prepaidUnits": {
         "enabled": 332,
         "suspended": 0,

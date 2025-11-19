@@ -1,36 +1,5 @@
-# Python
-__pycache__/
+.env
 *.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-*.egg
-*.egg-info/
-dist/
-build/
-.venv/
-venv/
-ENV/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Application data (runtime)
-data/m365_skus.json
+__pycache__/
 data/license_jobs.json
-data/mock_directory.yaml
-
-# Sensitive configuration
-config/settings.yaml
-
-# Logs
-*.log
+data/m365_skus.json

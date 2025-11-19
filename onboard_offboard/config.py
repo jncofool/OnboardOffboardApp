@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import os
+import base64
+import hashlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
@@ -9,6 +11,83 @@ from typing import Any, Dict, Iterable, Optional
 import shutil
 
 import yaml
+
+try:
+    from cryptography.fernet import Fernet
+except ImportError:
+    Fernet = None
+
+
+def _get_machine_key() -> bytes:
+    """Generate a consistent key based on machine characteristics."""
+    machine_id = os.environ.get('COMPUTERNAME', 'default') + os.environ.get('USERNAME', 'user')
+    return base64.urlsafe_b64encode(hashlib.sha256(machine_id.encode()).digest())
+
+
+def _decrypt_value(encrypted_value: str) -> str:
+    """Decrypt an encrypted value."""
+    if not Fernet:
+        return encrypted_value
+    try:
+        if encrypted_value.startswith('ENC:'):
+            cipher = Fernet(_get_machine_key())
+            encrypted_data = base64.b64decode(encrypted_value[4:])
+            return cipher.decrypt(encrypted_data).decode()
+    except Exception:
+        pass
+    return encrypted_value
+
+
+def _encrypt_value(plain_value: str) -> str:
+    """Encrypt a plain text value."""
+    if not Fernet:
+        return plain_value
+    try:
+        cipher = Fernet(_get_machine_key())
+        encrypted_data = cipher.encrypt(plain_value.encode())
+        return 'ENC:' + base64.b64encode(encrypted_data).decode()
+    except Exception:
+        return plain_value
+
+
+def _save_encrypted_secret(key: str, value: str) -> None:
+    """Save an encrypted secret to the .env file."""
+    if not value:
+        return
+    
+    env_file = Path(".env")
+    env_vars = {}
+    
+    # Load existing .env file
+    if env_file.exists():
+        with env_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    env_vars[k.strip()] = v.strip()
+    
+    # Update with new encrypted value
+    env_vars[key] = _encrypt_value(value)
+    
+    # Write back to .env file
+    env_file.parent.mkdir(parents=True, exist_ok=True)
+    with env_file.open("w", encoding="utf-8") as f:
+        for k, v in env_vars.items():
+            f.write(f"{k}={v}\n")
+
+
+def _load_env_file() -> None:
+    """Load environment variables from .env file if it exists."""
+    env_file = Path(".env")
+    if env_file.exists():
+        with env_file.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    decrypted_value = _decrypt_value(value.strip())
+                    os.environ.setdefault(key.strip(), decrypted_value)
 
 
 DEFAULT_CONFIG_PATH = Path("config/settings.yaml")
@@ -105,6 +184,18 @@ class ConfigurationError(RuntimeError):
     """Raised when the configuration file or environment variables are invalid."""
 
 
+def _substitute_env_vars(value: Any) -> Any:
+    """Recursively substitute ${VAR} placeholders with environment variables."""
+    if isinstance(value, str) and value.startswith("${") and value.endswith("}"):
+        env_var = value[2:-1]
+        return os.environ.get(env_var, value)
+    elif isinstance(value, dict):
+        return {k: _substitute_env_vars(v) for k, v in value.items()}
+    elif isinstance(value, list):
+        return [_substitute_env_vars(item) for item in value]
+    return value
+
+
 def _load_from_file(path: Path) -> Dict[str, Any]:
     if not path.exists():
         raise ConfigurationError(
@@ -112,7 +203,8 @@ def _load_from_file(path: Path) -> Dict[str, Any]:
             "Create it from 'config/settings.example.yaml' or set environment variables."
         )
     with path.open("r", encoding="utf-8") as file:
-        return yaml.safe_load(file) or {}
+        config_dict = yaml.safe_load(file) or {}
+        return _substitute_env_vars(config_dict)
 
 
 def _apply_environment_overrides(config_dict: Dict[str, Any]) -> Dict[str, Any]:
@@ -238,6 +330,7 @@ def _optional_str(value: Any) -> Optional[str]:
 def load_config(path: Optional[Path] = None) -> AppConfig:
     """Load application configuration from disk and environment variables."""
 
+    _load_env_file()
     config_dict = _load_config_dict(path)
     ldap_section = _get_required(config_dict, "ldap")
     sync_section = _get_required(config_dict, "sync")
@@ -347,7 +440,7 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
         "ldap": {
             "server_uri": config.ldap.server_uri,
             "user_dn": config.ldap.user_dn,
-            "password": config.ldap.password,
+            "password": "${ONBOARD_LDAP__PASSWORD}",
             "base_dn": config.ldap.base_dn,
             "user_ou": config.ldap.user_ou,
             "use_ssl": config.ldap.use_ssl,
@@ -376,7 +469,7 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
         "m365": {
             "tenant_id": config.m365.tenant_id or "",
             "client_id": config.m365.client_id or "",
-            "client_secret": config.m365.client_secret or "",
+            "client_secret": "${ONBOARD_M365__CLIENT_SECRET}",
             "sku_cache_file": str(config.m365.sku_cache_file),
             "cache_ttl_minutes": config.m365.cache_ttl_minutes,
             "default_usage_location": config.m365.default_usage_location or "",
@@ -387,7 +480,7 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
             "enabled": config.auth.enabled,
             "tenant_id": config.auth.tenant_id or "",
             "client_id": config.auth.client_id or "",
-            "client_secret": config.auth.client_secret or "",
+            "client_secret": "${ONBOARD_AUTH__CLIENT_SECRET}",
             "redirect_uri": config.auth.redirect_uri or "",
             "allowed_groups": list(config.auth.allowed_groups),
             "scopes": list(config.auth.scopes),
@@ -397,6 +490,14 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
 
 def save_config(config: AppConfig, path: Optional[Path] = None) -> Path:
     """Persist the configuration to disk, returning the path that was written."""
+
+    # Save secrets to encrypted .env file
+    if config.ldap.password:
+        _save_encrypted_secret("ONBOARD_LDAP__PASSWORD", config.ldap.password)
+    if config.m365.client_secret:
+        _save_encrypted_secret("ONBOARD_M365__CLIENT_SECRET", config.m365.client_secret)
+    if config.auth.client_secret:
+        _save_encrypted_secret("ONBOARD_AUTH__CLIENT_SECRET", config.auth.client_secret)
 
     target = _resolve_config_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -418,4 +519,6 @@ __all__ = [
     "AuthConfig",
     "save_config",
     "load_config",
+    "_encrypt_value",
+    "_save_encrypted_secret",
 ]

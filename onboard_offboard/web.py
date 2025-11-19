@@ -2906,6 +2906,14 @@ def _offboard_m365_user(app: Flask, config: AppConfig, user_info: Dict[str, Any]
             "country": None,
         }
         client._request("PATCH", f"/users/{user_id}", json=payload)
+        
+        # Clear manager reference separately
+        try:
+            client._request("DELETE", f"/users/{user_id}/manager/$ref")
+            print("  SUCCESS: Manager reference cleared")
+        except Exception as mgr_exc:
+            print(f"  Manager clear failed (may not have had one): {mgr_exc}")
+        
         print("  SUCCESS: User renamed and all contact/organization info cleared")
     except Exception as rename_exc:
         print(f"  FAILED: {rename_exc}")
