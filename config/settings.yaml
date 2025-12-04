@@ -1,40 +1,46 @@
 ldap:
-  server_uri: ldaps://dc01.example.com
-  user_dn: CN=svc_onboarding,CN=Users,DC=example,DC=com
-  password: ${ONBOARD_LDAP__PASSWORD}
+  server_uri: mock://demo
+  user_dn: CN=svc_onboarding,OU=Service Accounts,DC=example,DC=com
+  password: "${ONBOARD_LDAP_PASSWORD:-change-me}"
   base_dn: DC=example,DC=com
   user_ou: OU=Employees,DC=example,DC=com
   use_ssl: true
-  manager_search_filter: (&(objectClass=user)(|(title=Manager)(title=Director)))
+  manager_search_filter: "(objectClass=user)"
   manager_attributes:
-  - displayName
-  - mail
-  - title
-  group_search_base: OU=Groups,DC=example,DC=com
+    - displayName
+    - mail
+    - title
+  group_search_base: OU=User Groups,DC=example,DC=com
 sync:
-  command: powershell.exe -Command "Start-ADSyncSyncCycle -PolicyType Delta"
-  shell: false
+  command: echo "Simulated directory sync"
+  shell: true
   timeout: 180
 storage:
-  job_roles_file: data\job_roles.yaml
-  license_jobs_file: data\license_jobs.json
+  job_roles_file: data/job_roles.yaml
+  license_jobs_file: data/license_jobs.json
 m365:
-  tenant_id: 00000000-0000-0000-0000-000000000000
-  client_id: 00000000-0000-0000-0000-000000000000
-  client_secret: ${ONBOARD_M365__CLIENT_SECRET}
-  sku_cache_file: data\m365_skus.json
+  tenant_id: ""
+  client_id: ""
+  client_secret: ""
+  sku_cache_file: data/m365_skus.json
   cache_ttl_minutes: 720
-  default_usage_location: US
-  cert_thumbprint: 0000000000000000000000000000000000000000
-  exo_organization: example.com
+  default_usage_location: ""
+  cert_thumbprint: ""
+  exo_organization: ""
 auth:
   enabled: false
-  tenant_id: 00000000-0000-0000-0000-000000000000
-  client_id: 00000000-0000-0000-0000-000000000000
-  client_secret: ${ONBOARD_AUTH__CLIENT_SECRET}
-  redirect_uri: http://localhost:5000/auth/callback
-  allowed_groups:
-  - 00000000-0000-0000-0000-000000000000
+  tenant_id: ""
+  client_id: ""
+  client_secret: ""
+  redirect_uri: "http://localhost:5000/auth/callback"
+  allowed_groups: []
   scopes:
-  - https://graph.microsoft.com/User.Read
-  - https://graph.microsoft.com/GroupMember.Read.All
+    - https://graph.microsoft.com/User.Read
+    - https://graph.microsoft.com/GroupMember.Read.All
+smtp:
+  host: ""
+  port: 25
+  user: ""
+  password: ""
+  sender: ""
+  starttls: true
