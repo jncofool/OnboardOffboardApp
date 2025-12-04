@@ -134,6 +134,25 @@
           {% endfor %}
         </div>
       </div>
+      <div class="field">
+        <label for="app_input">Applications</label>
+        <div id="app_tags" class="tag-list"></div>
+        <div class="autocomplete">
+          <input
+            id="app_input"
+            type="text"
+            placeholder="Type an app name and press Enter (LastPass, LogMeIn, etc.)"
+            autocomplete="off"
+          />
+        </div>
+        <button type="button" class="inline-button" id="apply_role_apps">Use role defaults</button>
+        <div class="hint">Store app requests with the job role. Add or remove as needed.</div>
+        <div id="app_hidden_inputs">
+          {% for app in selected_apps or [] %}
+            <input type="hidden" name="apps" value="{{ app }}" />
+          {% endfor %}
+        </div>
+      </div>
       {% if m365_status.configured %}
         <div class="field" id="license_field">
           <label>Microsoft 365 Licenses</label>
@@ -248,14 +267,20 @@
       <div class="field">
         <button type="submit">Clone Account &amp; Sync</button>
       </div>
-    </form>
-    <script>
-      document.addEventListener("DOMContentLoaded", () => {
-        const fetchJson = async (endpoint, query, limit = 20) => {
-          const url = new URL(endpoint, window.location.origin);
-          if (query) {
-            url.searchParams.set("q", query);
-          }
+  </form>
+  <script>
+    document.addEventListener("DOMContentLoaded", () => {
+      const generatedPassword = {{ generated_password|tojson|safe }};
+      const passwordInput = document.getElementById("password");
+      if (passwordInput && generatedPassword && !passwordInput.value) {
+        passwordInput.value = generatedPassword;
+      }
+
+      const fetchJson = async (endpoint, query, limit = 20) => {
+        const url = new URL(endpoint, window.location.origin);
+        if (query) {
+          url.searchParams.set("q", query);
+        }
           if (limit) {
             url.searchParams.set("limit", limit);
           }
@@ -790,7 +815,9 @@
 
         const jobRoleInput = document.getElementById("job_role");
         const roleGroups = {{ role_groups|tojson|safe }};
+        const roleApps = {{ role_apps|tojson|safe }};
         const initialGroups = {{ selected_groups|tojson|safe }};
+        const initialApps = {{ selected_apps|default([], true)|tojson|safe }};
         const licenseCatalog = document.getElementById("license_catalog");
         const licenseHiddenInputs = document.getElementById("license_hidden_inputs");
         const licenseStatusMessage = document.getElementById("license_status_message");
@@ -807,6 +834,12 @@
         const roleLicenseDefaults = {{ role_license_defaults|tojson|safe }};
         let licenseManuallyEdited = initialLicenseSelections.length > 0;
         let licenseManager = null;
+        const appTags = document.getElementById("app_tags");
+        const appInput = document.getElementById("app_input");
+        const appHiddenInputs = document.getElementById("app_hidden_inputs");
+        const applyRoleAppsButton = document.getElementById("apply_role_apps");
+        const selectedApps = new Set(initialApps || []);
+        let appsManuallyEdited = (initialApps || []).length > 0;
 
 
         const templateSelectionArray = Array.isArray(templateLicense?.licenses) && templateLicense.licenses.length
@@ -905,6 +938,91 @@
           licenseManager.clear();
           licenseManuallyEdited = true;
         });
+
+        const renderApps = () => {
+          if (!appTags || !appHiddenInputs) {
+            return;
+          }
+          appTags.innerHTML = "";
+          appHiddenInputs.innerHTML = "";
+          Array.from(selectedApps).forEach((app) => {
+            const tag = document.createElement("span");
+            tag.className = "tag";
+            const text = document.createElement("span");
+            text.textContent = app;
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "tag-remove";
+            remove.innerHTML = "&times;";
+            remove.addEventListener("click", () => {
+              selectedApps.delete(app);
+              appsManuallyEdited = true;
+              renderApps();
+            });
+            tag.appendChild(text);
+            tag.appendChild(remove);
+            appTags.appendChild(tag);
+
+            const hidden = document.createElement("input");
+            hidden.type = "hidden";
+            hidden.name = "apps";
+            hidden.value = app;
+            appHiddenInputs.appendChild(hidden);
+          });
+          appTags.hidden = selectedApps.size === 0;
+        };
+
+        const addApp = (value, manual = false) => {
+          const trimmed = (value || "").trim();
+          if (!trimmed) {
+            return;
+          }
+          selectedApps.add(trimmed);
+          if (manual) {
+            appsManuallyEdited = true;
+          }
+          renderApps();
+        };
+
+        appInput?.addEventListener("keydown", (event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            addApp(appInput.value, true);
+            appInput.value = "";
+          }
+        });
+
+        appInput?.addEventListener("blur", () => {
+          if (!appInput) {
+            return;
+          }
+          const value = appInput.value;
+          if (value) {
+            addApp(value, true);
+            appInput.value = "";
+          }
+        });
+
+        const applyRoleApps = (force = false) => {
+          const roleName = jobRoleInput?.value?.trim() || "";
+          if (!roleName) {
+            return;
+          }
+          if (!force && appsManuallyEdited) {
+            return;
+          }
+          selectedApps.clear();
+          (roleApps[roleName] || []).forEach((value) => selectedApps.add(value));
+          appsManuallyEdited = false;
+          renderApps();
+        };
+
+        applyRoleAppsButton?.addEventListener("click", () => {
+          applyRoleApps(true);
+          appInput?.focus();
+        });
+
+        renderApps();
         const formatGroupLabel = (value, friendly) => {
           if (friendly) {
             return friendly;
@@ -1023,8 +1141,9 @@
         };
 
         const originalApplyRoleGroups = applyRoleGroups;
-        const applyRoleGroupsWithLicense = (forceLicense = false) => {
+        const applyRoleGroupsWithLicense = (forceLicense = false, forceApps = false) => {
           originalApplyRoleGroups();
+          applyRoleApps(forceApps);
           if (forceLicense) {
             applyRoleLicenseDefaults(true);
           } else {
@@ -1032,10 +1151,10 @@
           }
         };
 
-        jobRoleInput?.addEventListener("change", () => applyRoleGroupsWithLicense(false));
-        jobRoleInput?.addEventListener("blur", () => applyRoleGroupsWithLicense(false));
+        jobRoleInput?.addEventListener("change", () => applyRoleGroupsWithLicense(false, false));
+        jobRoleInput?.addEventListener("blur", () => applyRoleGroupsWithLicense(false, false));
         applyRoleGroupsButton?.addEventListener("click", () => {
-          applyRoleGroupsWithLicense(true);
+          applyRoleGroupsWithLicense(true, true);
           groupSearchInput?.focus();
         });
 
@@ -1104,9 +1223,12 @@
         });
 
         if (!initialGroups.length) {
-          applyRoleGroupsWithLicense(true);
+          applyRoleGroupsWithLicense(true, true);
         } else if (!licenseManuallyEdited) {
           applyRoleLicenseDefaults(true);
+        }
+        if (!initialApps.length) {
+          applyRoleApps(true);
         }
 
         const domain = {{ (email_domain or '')|tojson|safe }};

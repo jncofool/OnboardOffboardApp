@@ -200,6 +200,44 @@
     </section>
 
     <section>
+      <h2>Email (SMTP Notifications)</h2>
+      <p>Configure outbound email for new-account notifications. Leave Host empty to skip sending.</p>
+      <div class="field-grid">
+        <div class="field">
+          <label for="smtp_host">Host</label>
+          <input id="smtp_host" name="smtp_host" type="text" value="{{ config.smtp.host or '' }}" placeholder="smtp.example.com" />
+        </div>
+        <div class="field">
+          <label for="smtp_port">Port</label>
+          <input id="smtp_port" name="smtp_port" type="number" min="1" value="{{ config.smtp.port or 25 }}" />
+        </div>
+        <div class="field">
+          <label for="smtp_user">Username (optional)</label>
+          <input id="smtp_user" name="smtp_user" type="text" value="{{ config.smtp.user or '' }}" autocomplete="off" />
+        </div>
+        <div class="field">
+          <label for="smtp_password">Password</label>
+          <input
+            id="smtp_password"
+            name="smtp_password"
+            type="password"
+            value=""
+            placeholder="{% if config.smtp.password %}Leave blank to keep existing password{% else %}Enter password (optional){% endif %}"
+            autocomplete="off"
+          />
+        </div>
+        <div class="field">
+          <label for="smtp_sender">From Address</label>
+          <input id="smtp_sender" name="smtp_sender" type="email" value="{{ config.smtp.sender or '' }}" placeholder="onboarding@example.com" />
+        </div>
+        <div class="field" style="align-items: center;">
+          <label><input type="checkbox" name="smtp_starttls" {% if config.smtp.starttls %}checked{% endif %} /> Use STARTTLS</label>
+        </div>
+      </div>
+      <div class="hint">If Host is empty or no recipients are resolved, the app will skip sending and only log the event.</div>
+    </section>
+
+    <section>
       <h2>Portal Authentication (Entra ID)</h2>
       <p>Require users to sign in with your Entra ID tenant and optionally restrict access to specific security groups.</p>
       <div class="field">
@@ -255,13 +293,14 @@
           <th style="width: 25%;">Default Manager</th>
           <th style="width: 20%;">Licenses</th>
           <th style="width: 15%;">Groups</th>
+          <th style="width: 10%;">Apps</th>
           <th>Notes</th>
           <th style="width: 15%;">Actions</th>
         </tr>
       </thead>
       <tbody id="role_table_body">
         <tr>
-          <td colspan="5">Loading roles…</td>
+          <td colspan="7">Loading roles…</td>
         </tr>
       </tbody>
     </table>
@@ -331,6 +370,17 @@
           <div class="autocomplete-results" id="role_group_results" hidden></div>
         </div>
         <div class="hint">Search to add groups. Click the × on a tag to remove it.</div>
+      </div>
+      <div class="field">
+        <label for="role_apps_input">Default Applications</label>
+        <div id="role_app_tags" class="tag-list" hidden></div>
+        <input
+          id="role_apps_input"
+          type="text"
+          placeholder="Type an app name and press Enter (LastPass, LogMeIn, Signl4, etc.)"
+          autocomplete="off"
+        />
+        <div class="hint">Store app requests with each role. Add or remove as needed.</div>
       </div>
       {% if m365_status.configured %}
       <div class="field">
@@ -789,6 +839,65 @@
         return { add, set, get, resolveGroupNames };
       };
 
+      const createTagList = (tagsEl, inputEl) => {
+        const set = new Set();
+
+        const render = () => {
+          if (!tagsEl) return;
+          tagsEl.innerHTML = "";
+          set.forEach((value) => {
+            const tag = document.createElement("span");
+            tag.className = "tag";
+            const label = document.createElement("span");
+            label.textContent = value;
+            const remove = document.createElement("button");
+            remove.type = "button";
+            remove.className = "tag-remove";
+            remove.innerHTML = "&times;";
+            remove.addEventListener("click", () => {
+              set.delete(value);
+              render();
+            });
+            tag.appendChild(label);
+            tag.appendChild(remove);
+            tagsEl.appendChild(tag);
+          });
+          tagsEl.hidden = set.size === 0;
+        };
+
+        const add = (value, manual = false) => {
+          const trimmed = (value || "").trim();
+          if (!trimmed) return;
+          set.add(trimmed);
+          render();
+        };
+
+        const setValues = (values) => {
+          set.clear();
+          (values || []).forEach((value) => add(value));
+          render();
+        };
+
+        const getValues = () => Array.from(set.values());
+
+        if (inputEl) {
+          inputEl.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              add(inputEl.value, true);
+              inputEl.value = "";
+            }
+          });
+          inputEl.addEventListener("blur", () => {
+            if (!inputEl.value) return;
+            add(inputEl.value, true);
+            inputEl.value = "";
+          });
+        }
+
+        return { add, set: setValues, get: getValues };
+      };
+
       const roleTableBody = document.getElementById("role_table_body");
       const roleNewButton = document.getElementById("role_new_button");
       const roleForm = document.getElementById("role_form");
@@ -807,6 +916,8 @@
       const roleGroupTags = document.getElementById("role_group_tags");
       const roleGroupSearchInput = document.getElementById("role_group_search");
       const roleGroupResults = document.getElementById("role_group_results");
+      const roleAppTags = document.getElementById("role_app_tags");
+      const roleAppsInput = document.getElementById("role_apps_input");
       const roleMessage = document.getElementById("role_form_message");
       const roleResetButton = document.getElementById("role_reset_button");
 
@@ -848,6 +959,7 @@
         roleManagerClear
       );
       const roleGroupPicker = createGroupPicker(roleGroupTags, roleGroupSearchInput, roleGroupResults);
+      const roleAppList = createTagList(roleAppTags, roleAppsInput);
       const createLicenseManager = ({
         catalogEl,
         hiddenContainer,
@@ -1239,6 +1351,7 @@
         setManagerField("", "");
         roleAttributesInput.value = "";
         roleGroupPicker.set([]);
+        roleAppList.set([]);
         if (roleLicenseManager) {
           roleLicenseManager.setSelections([], { skipManual: true });
         }
@@ -1317,6 +1430,10 @@
           groupsCell.textContent = String(role.groups?.length || 0);
           row.appendChild(groupsCell);
 
+          const appsCell = document.createElement("td");
+          appsCell.textContent = String(role.apps?.length || 0);
+          row.appendChild(appsCell);
+
           const notesCell = document.createElement("td");
           notesCell.textContent = role.description || "";
           row.appendChild(notesCell);
@@ -1354,6 +1471,7 @@
         if (roleGroupPicker.resolveGroupNames) {
           roleGroupPicker.resolveGroupNames();
         }
+        roleAppList.set(role.apps || []);
         if (roleLicenseManager) {
           roleLicenseManager.setSelections(role.licenses || [], { skipManual: true });
         }
@@ -1414,6 +1532,7 @@
             default_manager_dn: roleManagerDnInput.value.trim() || null,
             attributes,
             groups: roleGroupPicker.get(),
+            apps: roleAppList.get(),
           };
           const licenseSelections = roleLicenseManager ? roleLicenseManager.getSelections() : [];
           payload.licenses = licenseSelections;

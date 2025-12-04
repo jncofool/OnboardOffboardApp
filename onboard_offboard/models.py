@@ -67,6 +67,7 @@ class JobRole:
     attributes: Dict[str, Any] = field(default_factory=dict)
     groups: List[str] = field(default_factory=list)
     licenses: List[LicenseSelection] = field(default_factory=list)
+    apps: List[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "JobRole":
@@ -96,6 +97,7 @@ class JobRole:
             attributes=dict(data.get("attributes", {})),
             groups=list(data.get("groups", [])),
             licenses=resolved,
+            apps=list(data.get("apps", [])),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -108,6 +110,7 @@ class JobRole:
             "attributes": dict(self.attributes),
             "groups": list(self.groups),
             "licenses": [selection.normalized().to_dict() for selection in self.licenses],
+            "apps": list(self.apps),
         }
         payload["license_sku_id"] = primary.sku_id if primary else None
         payload["disabled_service_plans"] = list(primary.disabled_plans) if primary else []
@@ -159,6 +162,7 @@ class Employee:
     attributes: Dict[str, Any] = field(default_factory=dict)
     groups: List[str] = field(default_factory=list)
     licenses: List[LicenseSelection] = field(default_factory=list)
+    apps: List[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         self.first_name = normalize_person_name(self.first_name)

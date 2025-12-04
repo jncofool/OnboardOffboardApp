@@ -30,6 +30,14 @@ m365:
   cache_ttl_minutes: 720
   default_usage_location: ""
 
+smtp:
+  host: ""
+  port: 25
+  user: ""
+  password: ""
+  sender: ""
+  starttls: true
+
 auth:
   enabled: false
   tenant_id: ""

@@ -14,6 +14,28 @@
     <a class="button secondary" href="{{ url_for('delete_user') }}">Offboard Employee</a>
   </div>
 
+  {% if recent_credentials %}
+    <section class="status-card" style="margin-top: 1.5rem;">
+      <span class="badge ok">New Account</span>
+      <p><strong>{{ recent_credentials.display_name }}</strong> was just created.</p>
+      <ul class="status-meta">
+        <li><strong>Username:</strong> <code>{{ recent_credentials.username }}</code></li>
+        <li><strong>Email:</strong> <code>{{ recent_credentials.email }}</code></li>
+        <li><strong>Password:</strong> <code>{{ recent_credentials.password }}</code></li>
+        {% if recent_credentials.job_role %}
+          <li><strong>Job Role:</strong> {{ recent_credentials.job_role }}</li>
+        {% endif %}
+        {% if recent_credentials.manager %}
+          <li><strong>Manager:</strong> {{ recent_credentials.manager }}</li>
+        {% endif %}
+        {% if recent_credentials.apps %}
+          <li><strong>Apps:</strong> {{ recent_credentials.apps|join(', ') }}</li>
+        {% endif %}
+      </ul>
+      <small>This summary is only shown once. Copy these details now if you need to send them manually.</small>
+    </section>
+  {% endif %}
+
   <h2 style="margin-top: 2rem;">Current Directory Settings</h2>
   <table>
     <tr>

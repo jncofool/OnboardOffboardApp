@@ -5,16 +5,20 @@ import json
 import os
 import re
 import secrets
+import string
 import subprocess
 import threading
 import time
 import unicodedata
+from html import escape
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import unquote
 
+import smtplib
+from email.message import EmailMessage
 import msal
 import requests
 from flask import (
@@ -36,6 +40,7 @@ from .config import (
     AuthConfig,
     LDAPConfig,
     M365Config,
+    SMTPConfig,
     SyncConfig,
     StorageConfig,
     ensure_default_config,
@@ -63,6 +68,164 @@ _AUTH_EXEMPT_ENDPOINTS = {"login", "logout", "auth_callback", "static"}
 _DEFAULT_AUTH_SCOPES = ("https://graph.microsoft.com/User.Read",)
 _RESERVED_AUTH_SCOPES = {"openid", "profile", "offline_access"}
 
+_PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!@#$%^&*()-_=+[]{}"
+
+
+def _generate_password(length: int = 16) -> str:
+    length = max(10, int(length or 0))
+    return "".join(secrets.choice(_PASSWORD_ALPHABET) for _ in range(length))
+
+
+def _parse_int(value: Any, default: int) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return default
+
+
+def _lookup_manager_email(client: ADClient, manager_dn: Optional[str]) -> Optional[str]:
+    if not manager_dn:
+        return None
+    try:
+        manager = client.get_user(manager_dn, attributes=["mail", "userPrincipalName", "displayName"])
+        if not manager:
+            return None
+        return (manager.get("mail") or manager.get("userPrincipalName") or "").strip() or None
+    except Exception:
+        return None
+
+
+def _smtp_settings(config: Optional[AppConfig]) -> Optional[Dict[str, Any]]:
+    cfg = getattr(config, "smtp", None)
+    host = (cfg.host if cfg else None) or os.environ.get("ONBOARD_SMTP_HOST")
+    if not host:
+        return None
+    port = None
+    try:
+        port = int((cfg.port if cfg else None) or os.environ.get("ONBOARD_SMTP_PORT", "25"))
+    except Exception:
+        port = 25
+    user = (cfg.user if cfg else None) or os.environ.get("ONBOARD_SMTP_USER") or None
+    password = (cfg.password if cfg else None) or os.environ.get("ONBOARD_SMTP_PASSWORD") or None
+    sender = (cfg.sender if cfg else None) or os.environ.get("ONBOARD_SMTP_FROM") or (user or "")
+    starttls_env = os.environ.get("ONBOARD_SMTP_STARTTLS")
+    starttls = cfg.starttls if cfg is not None else True
+    if starttls_env is not None:
+        starttls = starttls_env not in ("0", "false", "False")
+    return {
+        "host": host,
+        "port": port or 25,
+        "user": user,
+        "password": password,
+        "sender": sender,
+        "starttls": starttls,
+    }
+
+
+def _maybe_send_notification_email(
+    app: Flask,
+    config: AppConfig,
+    current_user: Optional[Dict[str, Any]],
+    manager_email: Optional[str],
+    employee: Employee,
+    password: str,
+    apps: Iterable[str],
+) -> None:
+    settings = _smtp_settings(config)
+    if not settings:
+        app.logger.info("Skipping notification email: SMTP settings not provided.")
+        return
+
+    recipients: List[str] = []
+    if manager_email:
+        recipients.append(manager_email)
+    user_email = None
+    if current_user:
+        user_email = (current_user.get("upn") or "").strip()
+        if user_email:
+            recipients.append(user_email)
+    recipients = list(dict.fromkeys([r for r in recipients if r]))
+    if not recipients:
+        app.logger.info("Skipping notification email: no recipients resolved.")
+        return
+
+    msg = EmailMessage()
+    msg["Subject"] = f"New account created: {employee.display_name}"
+    msg["From"] = settings["sender"] or user_email or "onboarding@localhost"
+    msg["To"] = ", ".join(recipients)
+
+    apps_list = _dedupe_preserve(apps) or []
+    group_list = _dedupe_preserve(employee.groups) or []
+
+    # Plain text (fallback)
+    text_body = (
+        f"A new account has been created.\n\n"
+        f"Name: {employee.display_name}\n"
+        f"Username: {employee.username}\n"
+        f"Email: {employee.email}\n"
+        f"Temporary password: {password}\n"
+    )
+    if employee.job_role:
+        text_body += f"Job role: {employee.job_role}\n"
+    if apps_list:
+        text_body += f"Apps: {', '.join(apps_list)}\n"
+    if group_list:
+        text_body += f"Groups (AD): {', '.join(group_list)}\n"
+    if manager_email:
+        text_body += f"Manager: {manager_email}\n"
+    text_body += "\nPlease share these credentials with the user securely.\n"
+    msg.set_content(text_body)
+
+    # HTML version
+    def safe(val: str) -> str:
+        return escape(val or "")
+
+    def join_list(values: Iterable[str]) -> str:
+        items = [safe(v) for v in values or [] if v]
+        if not items:
+            return "None"
+        return ", ".join(items)
+
+    html_parts = [
+        "<html><body style='font-family:Segoe UI,Arial,sans-serif;font-size:14px;color:#222;'>",
+        "<h2 style='margin-top:0;'>New account created</h2>",
+        "<table style='border-collapse:collapse;'>",
+        f"<tr><td style='padding:4px 8px;font-weight:600;'>Name:</td><td style='padding:4px 8px;'>{safe(employee.display_name)}</td></tr>",
+        f"<tr><td style='padding:4px 8px;font-weight:600;'>Username:</td><td style='padding:4px 8px;'>{safe(employee.username)}</td></tr>",
+        f"<tr><td style='padding:4px 8px;font-weight:600;'>Email:</td><td style='padding:4px 8px;'>{safe(employee.email)}</td></tr>",
+        f"<tr><td style='padding:4px 8px;font-weight:600;'>Temporary password:</td><td style='padding:4px 8px;font-family:Consolas,monospace;'>{safe(password)}</td></tr>",
+    ]
+    if employee.job_role:
+        html_parts.append(
+            f"<tr><td style='padding:4px 8px;font-weight:600;'>Job role:</td><td style='padding:4px 8px;'>{safe(employee.job_role)}</td></tr>"
+        )
+    if manager_email:
+        html_parts.append(
+            f"<tr><td style='padding:4px 8px;font-weight:600;'>Manager:</td><td style='padding:4px 8px;'>{safe(manager_email)}</td></tr>"
+        )
+    html_parts.append(
+        f"<tr><td style='padding:4px 8px;font-weight:600;'>Apps:</td><td style='padding:4px 8px;'>{join_list(apps_list)}</td></tr>"
+    )
+    html_parts.append(
+        f"<tr><td style='padding:4px 8px;font-weight:600;'>Groups (AD):</td><td style='padding:4px 8px;'>{join_list(group_list)}</td></tr>"
+    )
+    html_parts.append("</table>")
+    html_parts.append(
+        "<p style='margin-top:16px;'>Please share these credentials with the user securely.</p>"
+    )
+    html_parts.append("</body></html>")
+    msg.add_alternative("\n".join(html_parts), subtype="html")
+
+    try:
+        with smtplib.SMTP(settings["host"], settings["port"], timeout=30) as smtp:
+            if settings["starttls"]:
+                smtp.starttls()
+            if settings["user"] and settings["password"]:
+                smtp.login(settings["user"], settings["password"])
+            smtp.send_message(msg)
+        app.logger.info("Notification email sent to %s", recipients)
+    except Exception as exc:
+        app.logger.warning("Unable to send notification email: %s", exc)
 
 def _parse_license_selections(raw_values: Iterable[str]) -> List[LicenseSelection]:
     selections: List[LicenseSelection] = []
@@ -269,7 +432,8 @@ def register_routes(app: Flask) -> None:
     @app.route("/")
     def index() -> str:
         config = _load_app_config(app)
-        return render_template("index.html", config=config)
+        recent_credentials = session.pop("last_credentials", None)
+        return render_template("index.html", config=config, recent_credentials=recent_credentials)
 
     @app.route("/config", methods=["GET", "POST"])
     def edit_config() -> str:
@@ -384,7 +548,18 @@ def register_routes(app: Flask) -> None:
                     scopes=current_auth.scopes,
                 )
 
-                updated = AppConfig(ldap=ldap, sync=sync, storage=storage, m365=m365, auth=auth)
+                smtp_password_input = request.form.get("smtp_password", "")
+                smtp_password = smtp_password_input.strip() or config.smtp.password
+                smtp = SMTPConfig(
+                    host=request.form.get("smtp_host", "").strip() or None,
+                    port=_parse_int(request.form.get("smtp_port", config.smtp.port or 25), config.smtp.port or 25),
+                    user=request.form.get("smtp_user", "").strip() or None,
+                    password=smtp_password,
+                    sender=request.form.get("smtp_sender", "").strip() or None,
+                    starttls=request.form.get("smtp_starttls") == "on",
+                )
+
+                updated = AppConfig(ldap=ldap, sync=sync, storage=storage, m365=m365, auth=auth, smtp=smtp)
                 save_config(updated, app.config.get("CONFIG_PATH"))
                 flash("Configuration updated successfully.", "success")
                 return redirect(url_for("edit_config"))
@@ -410,6 +585,7 @@ def register_routes(app: Flask) -> None:
         companies, offices = _load_reference_values(config)
         email_domain = _email_domain_from_config(config)
         role_groups = {name: list(role.groups) for name, role in roles.items()}
+        role_apps = {name: list(getattr(role, "apps", []) or []) for name, role in roles.items()}
         role_license_defaults = {
             name: {
                 "licenses": [selection.to_dict() for selection in role.licenses],
@@ -419,6 +595,7 @@ def register_routes(app: Flask) -> None:
             for name, role in roles.items()
         }
         selected_groups = _dedupe_preserve(request.form.getlist("groups"))
+        selected_apps = _dedupe_preserve(request.form.getlist("apps"))
         legacy_license_sku = (request.form.get("license_sku") or "").strip()
         legacy_disabled_plans = _dedupe_preserve(request.form.getlist("license_disabled_plan"))
         legacy_selection = (
@@ -453,6 +630,8 @@ def register_routes(app: Flask) -> None:
                 office_name = request.form.get("office", "").strip()
                 attributes = _parse_attributes(request.form.get("attributes", ""))
                 selected_groups = _dedupe_preserve(request.form.getlist("groups"))
+                selected_apps = _dedupe_preserve(request.form.getlist("apps"))
+                selected_apps = _dedupe_preserve(request.form.getlist("apps"))
                 assignable_groups, skipped_groups = _filter_assignable_groups(selected_groups, config)
                 if skipped_groups:
                     flash(
@@ -538,10 +717,13 @@ def register_routes(app: Flask) -> None:
                     attributes=attributes,
                     groups=ad_groups,
                     licenses=form_license_selections,
+                    apps=selected_apps,
                 )
 
+                manager_email = None
                 with ADClient(config.ldap) as client:
                     result = client.create_user(employee, job_role, password=password)
+                    manager_email = _lookup_manager_email(client, effective_manager)
 
                 _trigger_sync(config)
 
@@ -562,6 +744,7 @@ def register_routes(app: Flask) -> None:
                         attributes=attributes,
                         groups=all_assigned_groups,
                         licenses=form_license_selections,
+                        apps=selected_apps,
                     )
                     if seed_status == "created":
                         flash(f"Saved job role template '{role_name}' for future use.", "info")
@@ -603,6 +786,16 @@ def register_routes(app: Flask) -> None:
                     f"Provisioned {result.get('sAMAccountName')} in {result.get('distinguished_name')}.",
                     "success",
                 )
+                session["last_credentials"] = {
+                    "display_name": employee.display_name,
+                    "username": employee.username,
+                    "email": employee.email,
+                    "password": password,
+                    "job_role": role_name,
+                    "manager": manager_email or effective_manager,
+                    "apps": selected_apps,
+                }
+                _maybe_send_notification_email(app, config, session.get("user"), manager_email, employee, password, selected_apps)
                 return redirect(url_for("index"))
             except Exception as exc:
                 flash(f"Unable to onboard user: {exc}", "error")
@@ -634,6 +827,9 @@ def register_routes(app: Flask) -> None:
             selected_disabled_plans=legacy_selection.disabled_plans if legacy_selection else [],
             selected_license_selections=[selection.to_dict() for selection in selected_license_selections],
             m365_status=m365_status,
+            selected_apps=selected_apps,
+            role_apps=role_apps,
+            generated_password=_generate_password(),
         )
 
     @app.get("/api/job-titles")
@@ -1060,6 +1256,8 @@ def register_routes(app: Flask) -> None:
 
         groups_input = data.get("groups") or []
         groups = _dedupe_preserve(str(value).strip() for value in groups_input)
+        apps_input = data.get("apps") or []
+        apps = _dedupe_preserve(str(value).strip() for value in apps_input)
 
         licenses_input = data.get("licenses") or []
         licenses: List[LicenseSelection] = []
@@ -1089,6 +1287,7 @@ def register_routes(app: Flask) -> None:
             attributes=attributes,
             groups=groups,
             licenses=licenses,
+            apps=apps,
         )
         roles[name] = role
         save_job_roles(config.storage.job_roles_file, roles)
@@ -1114,6 +1313,7 @@ def register_routes(app: Flask) -> None:
         managers, ous = _load_directory_context(config)
         companies, offices = _load_reference_values(config)
         role_groups = {name: list(role.groups) for name, role in roles.items()}
+        role_apps = {name: list(getattr(role, "apps", []) or []) for name, role in roles.items()}
         role_license_defaults = {}
         for name, role in roles.items():
             primary = role.primary_license
@@ -1129,6 +1329,7 @@ def register_routes(app: Flask) -> None:
         selected_user: Optional[Dict[str, Any]] = None
         template_groups: List[str] = []
         selected_groups = _dedupe_preserve(request.form.getlist("groups"))
+        selected_apps = _dedupe_preserve(request.form.getlist("apps"))
         legacy_license_sku = (request.form.get("license_sku") or "").strip()
         legacy_disabled_plans = _dedupe_preserve(request.form.getlist("license_disabled_plan"))
         legacy_selection = (
@@ -1446,13 +1647,16 @@ def register_routes(app: Flask) -> None:
                     attributes=attributes,
                     groups=ad_groups,
                     licenses=form_license_selections,
+                    apps=selected_apps,
                 )
 
                 chosen_ou = chosen_ou or role.user_ou
                 job_role = replace(role, user_ou=chosen_ou or role.user_ou)
 
+                manager_email = None
                 with ADClient(config.ldap) as client:
                     result = client.create_user(employee, job_role, password=password)
+                    manager_email = _lookup_manager_email(client, manager_dn)
 
                 _trigger_sync(config)
 
@@ -1473,6 +1677,7 @@ def register_routes(app: Flask) -> None:
                         attributes=attributes,
                         groups=all_assigned_groups,
                         licenses=form_license_selections,
+                        apps=selected_apps,
                     )
                     if seed_status == "created":
                         flash(f"Saved job role template '{role_name}' for future use.", "info")
@@ -1528,6 +1733,16 @@ def register_routes(app: Flask) -> None:
                     f"Cloned user into account {result.get('sAMAccountName')}.",
                     "success",
                 )
+                session["last_credentials"] = {
+                    "display_name": employee.display_name,
+                    "username": employee.username,
+                    "email": employee.email,
+                    "password": password,
+                    "job_role": role_name,
+                    "manager": manager_email or manager_dn,
+                    "apps": selected_apps,
+                }
+                _maybe_send_notification_email(app, config, session.get("user"), manager_email, employee, password, selected_apps)
                 return redirect(url_for("index"))
             except Exception as exc:
                 flash(f"Unable to clone user: {exc}", "error")
@@ -1576,6 +1791,9 @@ def register_routes(app: Flask) -> None:
             m365_status=m365_status,
             job_roles=roles,
             job_titles=job_titles,
+            selected_apps=selected_apps,
+            role_apps=role_apps,
+            generated_password=_generate_password(),
         )
 
     @app.route("/delete", methods=["GET", "POST"])
@@ -2015,6 +2233,7 @@ def _serialize_role(role: JobRole) -> Dict[str, Any]:
         "attributes": dict(role.attributes),
         "groups": list(role.groups),
         "licenses": licenses_payload,
+        "apps": list(getattr(role, "apps", []) or []),
     }
     # Retain backwards-compatible fields so existing UI/JS can continue to read them.
     response["license_sku_id"] = getattr(role, "license_sku_id", None)
@@ -2104,6 +2323,7 @@ def _auto_seed_job_role(
     attributes: Dict[str, Any],
     groups: Iterable[str],
     licenses: Iterable[LicenseSelection],
+    apps: Iterable[str] | None = None,
 ) -> Optional[str]:
     """Persist a job role template based on the submitted onboarding data."""
 
@@ -2116,6 +2336,7 @@ def _auto_seed_job_role(
     role_groups = _dedupe_preserve(groups or [])
     role_licenses = _merge_license_selections(licenses or [])
     role_attributes = _extract_role_attribute_defaults(normalized_name, attributes or {})
+    role_apps = _dedupe_preserve(apps or [])
 
     existing = roles.get(normalized_name)
     created = False
@@ -2130,6 +2351,7 @@ def _auto_seed_job_role(
             attributes=role_attributes,
             groups=role_groups,
             licenses=role_licenses,
+            apps=role_apps,
         )
         created = True
         changed = True
@@ -2143,6 +2365,8 @@ def _auto_seed_job_role(
             updates["groups"] = role_groups
         if role_licenses and not existing.licenses:
             updates["licenses"] = role_licenses
+        if role_apps and not getattr(existing, "apps", None):
+            updates["apps"] = role_apps
         merged_attributes = dict(existing.attributes)
         attr_changed = False
         for key, value in role_attributes.items():

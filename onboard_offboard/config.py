@@ -130,6 +130,22 @@ class StorageConfig:
 
 
 @dataclass
+class SMTPConfig:
+    """Settings for outbound notification email."""
+
+    host: Optional[str] = None
+    port: int = 25
+    user: Optional[str] = None
+    password: Optional[str] = None
+    sender: Optional[str] = None
+    starttls: bool = True
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.host)
+
+
+@dataclass
 class M365Config:
     """Settings for the Microsoft 365 / Graph integration."""
 
@@ -178,6 +194,7 @@ class AppConfig:
     storage: StorageConfig = field(default_factory=StorageConfig)
     m365: M365Config = field(default_factory=M365Config)
     auth: AuthConfig = field(default_factory=AuthConfig)
+    smtp: SMTPConfig = field(default_factory=SMTPConfig)
 
 
 class ConfigurationError(RuntimeError):
@@ -374,6 +391,19 @@ def load_config(path: Optional[Path] = None) -> AppConfig:
         ),
     )
 
+    smtp_section = config_dict.get("smtp", {})
+    try:
+        smtp_config = SMTPConfig(
+            host=_optional_str(smtp_section.get("host")),
+            port=_to_int(smtp_section.get("port", 25)),
+            user=_optional_str(smtp_section.get("user")),
+            password=_optional_str(smtp_section.get("password")),
+            sender=_optional_str(smtp_section.get("sender")),
+            starttls=_to_bool(smtp_section.get("starttls", True)),
+        )
+    except Exception as exc:
+        raise ConfigurationError(f"Invalid SMTP configuration: {exc}") from exc
+
     m365_section = config_dict.get("m365", {})
     default_m365 = M365Config()
     cache_path = _optional_path(m365_section.get("sku_cache_file")) or default_m365.sku_cache_file
@@ -430,6 +460,7 @@ def load_config(path: Optional[Path] = None) -> AppConfig:
         storage=storage_config,
         m365=m365_config,
         auth=auth_config,
+        smtp=smtp_config,
     )
 
 
@@ -466,6 +497,14 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
             "job_roles_file": str(config.storage.job_roles_file),
             "license_jobs_file": str(config.storage.license_jobs_file),
         },
+        "smtp": {
+            "host": config.smtp.host or "",
+            "port": config.smtp.port,
+            "user": config.smtp.user or "",
+            "password": "${ONBOARD_SMTP__PASSWORD}",
+            "sender": config.smtp.sender or "",
+            "starttls": config.smtp.starttls,
+        },
         "m365": {
             "tenant_id": config.m365.tenant_id or "",
             "client_id": config.m365.client_id or "",
@@ -498,6 +537,8 @@ def save_config(config: AppConfig, path: Optional[Path] = None) -> Path:
         _save_encrypted_secret("ONBOARD_M365__CLIENT_SECRET", config.m365.client_secret)
     if config.auth.client_secret:
         _save_encrypted_secret("ONBOARD_AUTH__CLIENT_SECRET", config.auth.client_secret)
+    if config.smtp.password:
+        _save_encrypted_secret("ONBOARD_SMTP__PASSWORD", config.smtp.password)
 
     target = _resolve_config_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -517,6 +558,7 @@ __all__ = [
     "StorageConfig",
     "M365Config",
     "AuthConfig",
+    "SMTPConfig",
     "save_config",
     "load_config",
     "_encrypt_value",
