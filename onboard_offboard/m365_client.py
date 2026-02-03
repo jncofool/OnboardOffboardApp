@@ -258,6 +258,15 @@ class M365Client:
         result = self._request("GET", f"/users/{user_id}/memberOf", params={"$select": "id"})
         return [group["id"] for group in result.get("value", []) if group.get("id")]
 
+    def get_user_manager(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """Get user's manager. Returns None if no manager assigned."""
+        try:
+            return self._request("GET", f"/users/{user_id}/manager", params={"$select": "id,mail,userPrincipalName,displayName"})
+        except M365GraphError as e:
+            if e.status_code == 404:
+                return None
+            raise
+
     def get_group(self, group_id: str) -> Dict[str, Any]:
         """Get group details by ID."""
         return self._request(

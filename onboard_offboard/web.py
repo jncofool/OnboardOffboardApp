@@ -1803,11 +1803,52 @@ def register_routes(app: Flask) -> None:
         search_results: List[Dict[str, Any]] = []
 
         if query:
+            app.logger.info("Delete page: searching for query='%s'", query)
             try:
                 with ADClient(config.ldap) as client:
                     search_results = client.search_users(query)
+                app.logger.info("Delete page: found %s AD users", len(search_results))
             except Exception as exc:
+                app.logger.error("Delete page: AD search failed: %s", exc)
                 flash(f"Unable to search for users: {exc}", "error")
+            
+            app.logger.info("Delete page: M365 configured=%s", config.m365.has_credentials)
+            if config.m365.has_credentials:
+                try:
+                    m365_client = _get_m365_client(app, config)
+                    app.logger.info("Delete page: M365 client created=%s", m365_client is not None)
+                    if m365_client:
+                        app.logger.info("Delete page: searching M365 for '%s'", query)
+                        # Search M365 users with partial match
+                        escaped = query.replace("'", "''")
+                        filter_str = f"startswith(displayName,'{escaped}') or startswith(userPrincipalName,'{escaped}') or startswith(mail,'{escaped}')"
+                        params = {
+                            "$filter": filter_str,
+                            "$select": "id,userPrincipalName,displayName,mail,onPremisesSyncEnabled",
+                            "$top": "25"
+                        }
+                        result = m365_client._request("GET", "/users", params=params)
+                        m365_users = result.get("value", [])
+                        app.logger.info("Delete page: found %s M365 users", len(m365_users))
+                        
+                        for graph_user in m365_users:
+                            is_cloud_only = not graph_user.get("onPremisesSyncEnabled")
+                            app.logger.info("Delete page: user %s cloud-only=%s", graph_user.get("displayName"), is_cloud_only)
+                            if is_cloud_only:
+                                upn = graph_user.get("userPrincipalName", "")
+                                already_in_results = any(r.get("mail") == upn or r.get("userPrincipalName") == upn for r in search_results)
+                                if not already_in_results:
+                                    cloud_user = {
+                                        "distinguishedName": f"M365:{graph_user['id']}",
+                                        "displayName": graph_user.get("displayName"),
+                                        "sAMAccountName": graph_user.get("userPrincipalName", "").split("@")[0],
+                                        "mail": graph_user.get("userPrincipalName"),
+                                        "userPrincipalName": graph_user.get("userPrincipalName"),
+                                    }
+                                    search_results.append(cloud_user)
+                                    app.logger.info("Delete page: added cloud-only user to results: %s", cloud_user.get("displayName"))
+                except Exception as exc:
+                    app.logger.error("Delete page: M365 user search failed: %s", exc)
 
         if request.method == "POST":
             user_dn = request.form.get("user_dn")
@@ -1817,13 +1858,26 @@ def register_routes(app: Flask) -> None:
             elif action == "offboard":
                 try:
                     user_info = None
-                    with ADClient(config.ldap) as client:
-                        user_info = client.get_user(user_dn, attributes=["displayName", "mail", "userPrincipalName", "sAMAccountName", "manager"])
-                        deleted = client.delete_user(user_dn)
-                    if not deleted:
-                        raise RuntimeError("User was not deleted from AD.")
+                    is_cloud_only = user_dn.startswith("M365:")
                     
-                    _trigger_sync(config)
+                    if is_cloud_only:
+                        user_id = user_dn.replace("M365:", "")
+                        m365_client = _get_m365_client(app, config)
+                        if m365_client:
+                            graph_user = m365_client.get_user(user_id, select="displayName,mail,userPrincipalName,manager")
+                            user_info = {
+                                "displayName": graph_user.get("displayName"),
+                                "mail": graph_user.get("mail"),
+                                "userPrincipalName": graph_user.get("userPrincipalName"),
+                                "manager": graph_user.get("manager"),
+                            }
+                    else:
+                        with ADClient(config.ldap) as client:
+                            user_info = client.get_user(user_dn, attributes=["displayName", "mail", "userPrincipalName", "sAMAccountName", "manager"])
+                            deleted = client.delete_user(user_dn)
+                        if not deleted:
+                            raise RuntimeError("User was not deleted from AD.")
+                        _trigger_sync(config)
                     
                     if config.m365.has_credentials and user_info:
                         flash(f"Offboarding started for {user_info.get('displayName')}. This process will take several minutes to complete in the background.", "info")
@@ -1840,12 +1894,27 @@ def register_routes(app: Flask) -> None:
                     flash(f"Unable to offboard user: {exc}", "error")
             else:
                 try:
-                    with ADClient(config.ldap) as client:
-                        deleted = client.delete_user(user_dn)
-                    if not deleted:
-                        raise RuntimeError("User was not deleted.")
-                    _trigger_sync(config)
-                    flash(f"Permanently deleted {user_dn} and triggered sync.", "success")
+                    is_cloud_only = user_dn.startswith("M365:")
+                    
+                    if is_cloud_only:
+                        user_id = user_dn.replace("M365:", "")
+                        m365_client = _get_m365_client(app, config)
+                        if not m365_client:
+                            raise RuntimeError("M365 client not available")
+                        
+                        graph_user = m365_client.get_user(user_id, select="displayName,userPrincipalName")
+                        display_name = graph_user.get("displayName", user_id)
+                        
+                        m365_client._request("DELETE", f"/users/{user_id}")
+                        flash(f"Permanently deleted cloud-only user {display_name}.", "success")
+                    else:
+                        with ADClient(config.ldap) as client:
+                            deleted = client.delete_user(user_dn)
+                        if not deleted:
+                            raise RuntimeError("User was not deleted.")
+                        _trigger_sync(config)
+                        flash(f"Permanently deleted {user_dn} and triggered sync.", "success")
+                    
                     return redirect(url_for("delete_user"))
                 except Exception as exc:
                     flash(f"Unable to delete user: {exc}", "error")
@@ -2862,9 +2931,18 @@ def _offboard_m365_user_background(app: Flask, config: AppConfig, user_info: Dic
     """Background thread wrapper for M365 offboarding."""
     with app.app_context():
         try:
+            app.logger.info("Background M365 offboarding thread started for %s", user_info.get("displayName"))
+            print(f"\n{'='*80}")
+            print(f"BACKGROUND OFFBOARDING THREAD STARTED")
+            print(f"User: {user_info.get('displayName')}")
+            print(f"Email: {user_info.get('userPrincipalName') or user_info.get('mail')}")
+            print(f"{'='*80}\n")
             _offboard_m365_user(app, config, user_info)
         except Exception as exc:
             app.logger.exception("Background M365 offboarding failed: %s", exc)
+            print(f"\n{'='*80}")
+            print(f"BACKGROUND OFFBOARDING FAILED: {exc}")
+            print(f"{'='*80}\n")
 
 
 def _offboard_m365_user(app: Flask, config: AppConfig, user_info: Dict[str, Any]) -> None:
@@ -2885,46 +2963,73 @@ def _offboard_m365_user(app: Flask, config: AppConfig, user_info: Dict[str, Any]
     print("Waiting 90s for AD sync to complete...")
     time.sleep(90)
     
-    print("Looking for user in deleted items...")
+    print("Looking for user in M365...")
     graph_user = None
     user_id = None
+    is_cloud_only = False
     
+    # First try to find as active user (365-only accounts)
     try:
-        deleted_users = client._request("GET", "/directory/deletedItems/microsoft.graph.user")
-        for deleted in deleted_users.get("value", []):
-            deleted_upn = (deleted.get("userPrincipalName") or "").lower()
-            deleted_mail = (deleted.get("mail") or "").lower()
-            lookup_lower = lookup.lower()
-            
-            if deleted_upn == lookup_lower or deleted_mail == lookup_lower or lookup_lower in deleted_upn:
-                user_id = deleted["id"]
-                print(f"Found in deleted items: {user_id} (UPN: {deleted.get('userPrincipalName')})")
-                print("Restoring user...")
-                client.restore_user(user_id)
-                print("Waiting for restore to complete...")
-                time.sleep(30)
+        print("Checking active users...")
+        graph_user = client.find_user(lookup, select="id,userPrincipalName,displayName,mail,manager,onPremisesSyncEnabled")
+        if graph_user:
+            user_id = graph_user["id"]
+            is_cloud_only = not graph_user.get("onPremisesSyncEnabled")
+            print(f"Found active user: {user_id} (UPN: {graph_user.get('userPrincipalName')}, Cloud-only: {is_cloud_only})")
+    except Exception as active_exc:
+        print(f"Not found in active users: {active_exc}")
+    
+    # If not found as active, check deleted items (hybrid accounts)
+    if not graph_user:
+        try:
+            print("Checking deleted items...")
+            deleted_users = client._request("GET", "/directory/deletedItems/microsoft.graph.user")
+            for deleted in deleted_users.get("value", []):
+                deleted_upn = (deleted.get("userPrincipalName") or "").lower()
+                deleted_mail = (deleted.get("mail") or "").lower()
+                lookup_lower = lookup.lower()
                 
-                for attempt in range(5):
-                    try:
-                        graph_user = client.get_user(user_id, select="id,userPrincipalName,displayName,mail,manager")
-                        print(f"User restored: {graph_user.get('userPrincipalName')}")
-                        break
-                    except Exception as get_exc:
-                        if attempt < 4:
-                            print(f"  Restore not ready, waiting 10s... (attempt {attempt + 1}/5)")
-                            time.sleep(10)
-                        else:
-                            raise
-                break
-        else:
-            raise RuntimeError(f"User {lookup} not found in M365 deleted items after sync")
-    except Exception as restore_exc:
-        raise RuntimeError(f"Failed to find/restore user: {restore_exc}")
+                if deleted_upn == lookup_lower or deleted_mail == lookup_lower or lookup_lower in deleted_upn:
+                    user_id = deleted["id"]
+                    print(f"Found in deleted items: {user_id} (UPN: {deleted.get('userPrincipalName')})")
+                    print("Restoring user...")
+                    client.restore_user(user_id)
+                    print("Waiting for restore to complete...")
+                    time.sleep(30)
+                    
+                    for attempt in range(5):
+                        try:
+                            graph_user = client.get_user(user_id, select="id,userPrincipalName,displayName,mail,manager")
+                            print(f"User restored: {graph_user.get('userPrincipalName')}")
+                            break
+                        except Exception as get_exc:
+                            if attempt < 4:
+                                print(f"  Restore not ready, waiting 10s... (attempt {attempt + 1}/5)")
+                                time.sleep(10)
+                            else:
+                                raise
+                    break
+            else:
+                raise RuntimeError(f"User {lookup} not found in M365 active users or deleted items")
+        except Exception as restore_exc:
+            raise RuntimeError(f"Failed to find/restore user: {restore_exc}")
     
     display_name = graph_user.get("displayName", "")
-    manager_id = graph_user.get("manager", {}).get("id") if isinstance(graph_user.get("manager"), dict) else None
+    
+    # Get manager information
+    manager_id = None
     manager_email = None
     
+    try:
+        manager_info = client.get_user_manager(user_id)
+        if manager_info:
+            manager_id = manager_info.get("id")
+            manager_email = manager_info.get("mail")
+            print(f"Manager found via Graph API: {manager_email}")
+    except Exception as mgr_exc:
+        print(f"Could not get manager from Graph API: {mgr_exc}")
+    
+    # Fallback: try AD manager if hybrid account
     if not manager_id and user_info.get("manager"):
         manager_dn = user_info["manager"]
         try:
@@ -2939,6 +3044,7 @@ def _offboard_m365_user(app: Flask, config: AppConfig, user_info: Dict[str, Any]
         except Exception:
             pass
     
+    # Final attempt: if we have manager_id but no email
     if manager_id and not manager_email:
         try:
             manager_user = client.get_user(manager_id, select="mail")

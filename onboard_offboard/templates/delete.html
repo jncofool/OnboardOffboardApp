@@ -12,37 +12,39 @@
 
   {% if search_results %}
     <h2>Results</h2>
-    <table>
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Username</th>
-          <th>Email</th>
-          <th>Action</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for user in search_results %}
+    <div style="margin: 0 -1.75rem; overflow-x: auto;">
+      <table style="width: 100%; min-width: 800px;">
+        <thead>
           <tr>
-            <td>{{ user.get('displayName') }}</td>
-            <td>{{ user.get('sAMAccountName') }}</td>
-            <td>{{ user.get('mail') }}</td>
-            <td>
-              <form method="post" style="display:inline-block;" onsubmit="return confirm('Offboard {{ user.get('displayName') or user.get('distinguishedName') }}? This will convert mailbox to shared, forward to manager, remove licenses/groups, and block sign-in.');">
-                <input type="hidden" name="user_dn" value="{{ user.get('distinguishedName') }}" />
-                <input type="hidden" name="action" value="offboard" />
-                <button type="submit" class="button">Offboard</button>
-              </form>
-              <form method="post" style="display:inline-block; margin-left:0.5rem;" onsubmit="return confirm('Permanently delete {{ user.get('displayName') or user.get('distinguishedName') }}? This cannot be undone.');">
-                <input type="hidden" name="user_dn" value="{{ user.get('distinguishedName') }}" />
-                <input type="hidden" name="action" value="delete" />
-                <button type="submit" class="button secondary">Delete</button>
-              </form>
-            </td>
+            <th style="padding-left:1.75rem; width: 20%;">Name</th>
+            <th style="width: 20%;">Username</th>
+            <th style="width: 35%;">Email</th>
+            <th style="padding-right:1.75rem; width: 25%;">Action</th>
           </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {% for user in search_results %}
+            <tr>
+              <td style="padding-left:1.75rem;">{{ user.get('displayName') }}</td>
+              <td>{{ user.get('sAMAccountName') }}</td>
+              <td>{{ user.get('mail') }}</td>
+              <td style="white-space:nowrap; padding-right:1.75rem;">
+                <form method="post" style="display:inline-block; margin-right:0.5rem;" onsubmit="return confirm('Offboard {{ user.get('displayName') or user.get('distinguishedName') }}? This will convert mailbox to shared, forward to manager, remove licenses/groups, and block sign-in.');">
+                  <input type="hidden" name="user_dn" value="{{ user.get('distinguishedName') }}" />
+                  <input type="hidden" name="action" value="offboard" />
+                  <button type="submit" class="button">Offboard</button>
+                </form>
+                <form method="post" style="display:inline-block;" onsubmit="return confirm('Permanently delete {{ user.get('displayName') or user.get('distinguishedName') }}? This cannot be undone.');">
+                  <input type="hidden" name="user_dn" value="{{ user.get('distinguishedName') }}" />
+                  <input type="hidden" name="action" value="delete" />
+                  <button type="submit" class="button secondary">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
   {% elif query %}
     <p>No users matched "{{ query }}".</p>
   {% endif %}
