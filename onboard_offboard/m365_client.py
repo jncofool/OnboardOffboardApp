@@ -302,6 +302,63 @@ class M365Client:
         """Restore a deleted user."""
         return self._request("POST", f"/directory/deletedItems/{user_id}/restore")
 
+    @staticmethod
+    def _deleted_user_matches(item: Dict[str, Any], lookup_lower: str) -> bool:
+        """Return True if a deleted-item record matches the lookup (UPN/mail)."""
+        upn = (item.get("userPrincipalName") or "").lower()
+        mail = (item.get("mail") or "").lower()
+        return (
+            upn == lookup_lower
+            or mail == lookup_lower
+            or (bool(lookup_lower) and lookup_lower in upn)
+        )
+
+    def find_deleted_user(
+        self, query: str, select: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Find a soft-deleted user in the directory recycle bin by UPN or mail.
+
+        Searches the full ``deletedItems`` collection (following @odata.nextLink
+        pagination via :meth:`_request_all`) so the user is found even when the
+        tenant has more than one page (~100) of soft-deleted objects. The Graph
+        ``deletedItems`` endpoint returns only 100 objects per page by default,
+        so a single-page read silently truncates results.
+
+        An efficient server-side ``$filter`` is attempted first; if the service
+        rejects the filter for any reason, it falls back to a full client-side
+        scan so correctness never depends on filter support.
+        """
+        cleaned = (query or "").strip()
+        if not cleaned:
+            return None
+        lookup_lower = cleaned.lower()
+        select_clause = select or "id,userPrincipalName,displayName,mail"
+        base = "/directory/deletedItems/microsoft.graph.user"
+
+        # Preferred path: server-side filter (avoids scanning the whole bin).
+        escaped = cleaned.replace("'", "''")
+        try:
+            params = {
+                "$filter": f"userPrincipalName eq '{escaped}' or mail eq '{escaped}'",
+                "$select": select_clause,
+                "$top": 999,
+            }
+            for item in self._request_all(base, params=params):
+                if self._deleted_user_matches(item, lookup_lower):
+                    return item
+        except M365GraphError:
+            # Filter unsupported/rejected — fall through to a full scan below.
+            pass
+
+        # Fallback: scan every page and match in Python. This also covers any
+        # records the server-side filter missed (e.g. mangled UPNs).
+        for item in self._request_all(
+            base, params={"$select": select_clause, "$top": 999}
+        ):
+            if self._deleted_user_matches(item, lookup_lower):
+                return item
+        return None
+
     # ------------------------------------------------------------------ #
     # Group helpers                                                      #
     # ------------------------------------------------------------------ #

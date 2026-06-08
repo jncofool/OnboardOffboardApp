@@ -3315,41 +3315,94 @@ def _offboard_m365_user(app: Flask, config: AppConfig, user_info: Dict[str, Any]
             is_cloud_only = not graph_user.get("onPremisesSyncEnabled")
             _log("  Found active user: %s (UPN: %s, Cloud-only: %s)", user_id, graph_user.get("userPrincipalName"), is_cloud_only)
     except Exception as active_exc:
-        _log("  Not found in active users: %s", active_exc)
+        _log("  Not found in active users: %s", active_exc, level="warning")
 
     if not graph_user:
-        try:
-            _log("  Checking deleted items...")
-            deleted_users = client._request("GET", "/directory/deletedItems/microsoft.graph.user")
-            for deleted in deleted_users.get("value", []):
-                deleted_upn = (deleted.get("userPrincipalName") or "").lower()
-                deleted_mail = (deleted.get("mail") or "").lower()
-                lookup_lower = lookup.lower()
+        # The deletion has propagated out of active users, but for a hybrid
+        # soft-delete the user lands in the directory recycle bin a few
+        # seconds-to-minutes LATER. Removal from /users and appearance in
+        # /deletedItems are NOT atomic, so we must poll the recycle bin with
+        # retries rather than checking exactly once (the previous one-shot
+        # check failed whenever we looked a moment too early). The lookup also
+        # follows pagination so users are found even with >100 deleted objects.
+        _DELETED_POLL_INTERVAL = 20  # seconds between recycle-bin checks
+        _DELETED_MAX_WAIT = 300  # up to 5 minutes for the soft-delete to appear
+        _log(
+            "  Not in active users — polling the directory recycle bin (up to %ds)...",
+            _DELETED_MAX_WAIT,
+        )
+        deleted_user = None
+        waited = 0
+        while True:
+            try:
+                deleted_user = client.find_deleted_user(
+                    lookup, select="id,userPrincipalName,displayName,mail"
+                )
+            except Exception as find_exc:
+                _log(
+                    "  Recycle-bin lookup error after %ds: %s",
+                    waited,
+                    find_exc,
+                    level="warning",
+                )
+                deleted_user = None
 
-                if deleted_upn == lookup_lower or deleted_mail == lookup_lower or lookup_lower in deleted_upn:
-                    user_id = deleted["id"]
-                    _log("  Found in deleted items: %s (UPN: %s)", user_id, deleted.get("userPrincipalName"))
-                    _log("  Restoring user...")
-                    client.restore_user(user_id)
-                    _log("  Waiting 30s for restore to propagate...")
-                    time.sleep(30)
+            if deleted_user:
+                _log(
+                    "  Found in deleted items after %ds: %s (UPN: %s)",
+                    waited,
+                    deleted_user["id"],
+                    deleted_user.get("userPrincipalName"),
+                )
+                break
+            if waited >= _DELETED_MAX_WAIT:
+                break
+            _log(
+                "  Not in recycle bin yet after %ds, waiting %ds...",
+                waited,
+                _DELETED_POLL_INTERVAL,
+            )
+            time.sleep(_DELETED_POLL_INTERVAL)
+            waited += _DELETED_POLL_INTERVAL
 
-                    for attempt in range(5):
-                        try:
-                            graph_user = client.get_user(user_id, select="id,userPrincipalName,displayName,mail,manager")
-                            _log("  User restored successfully: %s", graph_user.get("userPrincipalName"))
-                            break
-                        except Exception as get_exc:
-                            if attempt < 4:
-                                _log("  Restore not ready, waiting 10s... (attempt %d/5)", attempt + 1)
-                                time.sleep(10)
-                            else:
-                                raise
-                    break
-            else:
-                raise RuntimeError(f"User {lookup} not found in M365 active users or deleted items")
-        except Exception as restore_exc:
-            raise RuntimeError(f"Failed to find/restore user: {restore_exc}")
+        if not deleted_user:
+            raise RuntimeError(
+                f"User {lookup} was not found in M365 active users and did not "
+                f"appear in the directory recycle bin within {_DELETED_MAX_WAIT}s. "
+                f"The AD sync may not have exported the deletion to Entra yet — "
+                f"wait a few minutes and retry the offboarding."
+            )
+
+        user_id = deleted_user["id"]
+        _log("  Restoring user %s...", user_id)
+        client.restore_user(user_id)
+        _log("  Waiting 30s for restore to propagate...")
+        time.sleep(30)
+
+        for attempt in range(5):
+            try:
+                graph_user = client.get_user(
+                    user_id,
+                    select="id,userPrincipalName,displayName,mail,manager",
+                )
+                _log(
+                    "  User restored successfully: %s",
+                    graph_user.get("userPrincipalName"),
+                )
+                break
+            except Exception as get_exc:
+                if attempt < 4:
+                    _log(
+                        "  Restore not ready, waiting 10s... (attempt %d/5)",
+                        attempt + 1,
+                    )
+                    time.sleep(10)
+                else:
+                    raise RuntimeError(
+                        f"User {lookup} was found in the recycle bin and a restore "
+                        f"was triggered, but the account did not become available "
+                        f"in time: {get_exc}"
+                    )
 
     display_name = graph_user.get("displayName", "")
 
