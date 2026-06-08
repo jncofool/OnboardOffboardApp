@@ -27,6 +27,31 @@ def normalize_person_name(raw: str) -> str:
     return " ".join(_capitalize_segment(part) for part in stripped.split())
 
 
+def _escape_dn_component(value: str) -> str:
+    """Escape a value for use as an RDN value in a distinguished name (RFC 4514).
+
+    Without this, display names containing characters like ``,`` ``+`` ``=`` or
+    leading/trailing spaces (e.g. "Last, First") would create a malformed DN or
+    place the object in the wrong container.
+    """
+    if not value:
+        return value
+    special = {'\\', ',', '+', '"', '<', '>', ';', '='}
+    escaped_chars: List[str] = []
+    for char in value:
+        if char in special:
+            escaped_chars.append("\\" + char)
+        else:
+            escaped_chars.append(char)
+    result = "".join(escaped_chars)
+    # Leading/trailing spaces and a leading '#' must also be escaped.
+    if result.startswith(" ") or result.startswith("#"):
+        result = "\\" + result
+    if result.endswith(" ") and not result.endswith("\\ "):
+        result = result[:-1] + "\\ "
+    return result
+
+
 @dataclass
 class LicenseSelection:
     """Represents a Microsoft 365 license selection with disabled service plans."""
@@ -179,7 +204,7 @@ class Employee:
 
     def distinguished_name(self, user_ou: str, base_dn: str) -> str:
         container = user_ou if user_ou else base_dn
-        return f"CN={self.display_name},{container}"
+        return f"CN={_escape_dn_component(self.display_name)},{container}"
 
     @property
     def primary_license(self) -> Optional[LicenseSelection]:

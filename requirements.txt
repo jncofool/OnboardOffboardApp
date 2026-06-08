@@ -4,3 +4,5 @@ PyYAML>=6.0
 typer[all]>=0.9
 msal>=1.26.0
 requests>=2.31
+cryptography>=42.0
+waitress>=3.0

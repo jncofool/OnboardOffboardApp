@@ -38,6 +38,16 @@
 
   {% if selected_user %}
     <h2 style="margin-top: 2rem;">Clone Details</h2>
+    {% if is_cloud_template %}
+      <div class="status-card">
+        <span class="badge">Cloud-only</span>
+        <p>
+          This template is a cloud-only (Entra ID) account. The new account will also be created
+          as a cloud-only user in Microsoft 365. On-premises AD groups and OU do not apply;
+          licenses and Azure (cloud) groups carry over.
+        </p>
+      </div>
+    {% endif %}
     <form method="post">
       <input type="hidden" name="source_dn" value="{{ selected_user.get('distinguishedName') }}" />
       <div class="field">

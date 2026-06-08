@@ -82,7 +82,9 @@ class M365Client:
         return str(result["access_token"])
 
     def _request(self, method: str, path: str, **kwargs: Any) -> Dict[str, Any]:
-        url = GRAPH_BASE_URL + path
+        # ``path`` may be a Graph-relative path ("/users") or an absolute URL,
+        # which is what the @odata.nextLink paging links contain.
+        url = path if path.startswith("http") else GRAPH_BASE_URL + path
         headers = kwargs.pop("headers", {}) or {}
         headers.setdefault("Authorization", f"Bearer {self._acquire_token()}")
         headers.setdefault("Accept", "application/json")
@@ -112,6 +114,30 @@ class M365Client:
 
         return response.json()
 
+    def _request_all(
+        self,
+        path: str,
+        params: Optional[Dict[str, Any]] = None,
+        **kwargs: Any,
+    ) -> List[Dict[str, Any]]:
+        """GET a collection endpoint, following @odata.nextLink to the end.
+
+        Graph caps collection responses (typically 100 items) and returns an
+        ``@odata.nextLink`` for the next page. Callers that need the *complete*
+        set (group memberships, SKUs, etc.) must follow every page; reading only
+        the first page silently truncates results.
+        """
+        items: List[Dict[str, Any]] = []
+        result = self._request("GET", path, params=params, **kwargs)
+        items.extend(result.get("value", []) or [])
+        next_link = result.get("@odata.nextLink")
+        # Subsequent pages already encode their query params in the nextLink URL.
+        while next_link:
+            result = self._request("GET", next_link)
+            items.extend(result.get("value", []) or [])
+            next_link = result.get("@odata.nextLink")
+        return items
+
     # ------------------------------------------------------------------ #
     # SKU catalog management                                             #
     # ------------------------------------------------------------------ #
@@ -125,15 +151,13 @@ class M365Client:
         return timedelta(minutes=minutes)
 
     def list_subscribed_skus(self) -> List[Dict[str, Any]]:
-        result = self._request(
-            "GET",
+        return self._request_all(
             "/subscribedSkus",
             params={
                 "$select": "id,skuId,skuPartNumber,capabilityStatus,prepaidUnits,appliesTo,"
                 "consumedUnits,servicePlans",
             },
         )
-        return result.get("value", [])
 
     def get_sku_catalog(self, force_refresh: bool = False) -> CatalogSnapshot:
         cached = self.peek_cached_catalog()
@@ -210,6 +234,50 @@ class M365Client:
             return {}
         return self._request("PATCH", f"/users/{user_id}", json=payload)
 
+    def create_user(
+        self,
+        display_name: str,
+        user_principal_name: str,
+        password: str,
+        mail_nickname: Optional[str] = None,
+        force_change_password: bool = True,
+        usage_location: Optional[str] = None,
+        account_enabled: bool = True,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Create a cloud-only (Azure AD / Entra) user via Graph.
+
+        Returns the created user object (includes ``id`` and ``userPrincipalName``).
+        """
+        if not mail_nickname:
+            mail_nickname = (user_principal_name.split("@", 1)[0] or "user").strip()
+        payload: Dict[str, Any] = {
+            "accountEnabled": account_enabled,
+            "displayName": display_name,
+            "mailNickname": mail_nickname,
+            "userPrincipalName": user_principal_name,
+            "passwordProfile": {
+                "password": password,
+                "forceChangePasswordNextSignIn": force_change_password,
+            },
+        }
+        if usage_location:
+            payload["usageLocation"] = usage_location
+        if extra:
+            # Only forward non-empty values so we never clear fields with None.
+            for key, value in extra.items():
+                if value is None:
+                    continue
+                if isinstance(value, str) and not value.strip():
+                    continue
+                payload[key] = value
+        return self._request("POST", "/users", json=payload)
+
+    def set_user_manager(self, user_id: str, manager_id: str) -> None:
+        """Assign a manager reference to a user."""
+        payload = {"@odata.id": f"{GRAPH_BASE_URL}/users/{manager_id}"}
+        self._request("PUT", f"/users/{user_id}/manager/$ref", json=payload)
+
     def get_user(self, user_id: str, select: Optional[str] = None) -> Dict[str, Any]:
         params = {}
         if select:
@@ -243,8 +311,7 @@ class M365Client:
             escaped = query.replace("'", "''")
             params["$filter"] = f"startswith(displayName,'{escaped}') or startswith(mailNickname,'{escaped}')"
         params["$top"] = str(limit)
-        result = self._request("GET", "/groups", params=params)
-        return result.get("value", [])
+        return self._request_all("/groups", params=params)[:limit]
 
     def add_user_to_group(self, user_id: str, group_id: str) -> None:
         payload = {"@odata.id": f"{GRAPH_BASE_URL}/directoryObjects/{user_id}"}
@@ -254,9 +321,11 @@ class M365Client:
         self._request("DELETE", f"/groups/{group_id}/members/{user_id}/$ref")
 
     def get_user_groups(self, user_id: str) -> List[str]:
-        """Get list of group IDs the user is a member of."""
-        result = self._request("GET", f"/users/{user_id}/memberOf", params={"$select": "id"})
-        return [group["id"] for group in result.get("value", []) if group.get("id")]
+        """Get list of group IDs the user is a member of (all pages)."""
+        groups = self._request_all(
+            f"/users/{user_id}/memberOf", params={"$select": "id"}
+        )
+        return [group["id"] for group in groups if group.get("id")]
 
     def get_user_manager(self, user_id: str) -> Optional[Dict[str, Any]]:
         """Get user's manager. Returns None if no manager assigned."""

@@ -198,3 +198,29 @@ class LicenseJobStore:
         with self._lock:
             self._jobs[job.id] = job
             self._save()
+
+    def cancel_jobs_for_principal(self, principal: str) -> int:
+        """Cancel all pending jobs matching a principal (case-insensitive).
+
+        Also checks alternate principal candidates. Returns the number of jobs
+        cancelled. Used during offboarding to prevent the license worker from
+        racing with the AD sync (writing to a user that is about to be deleted).
+        """
+        if not principal:
+            return 0
+        lowered = principal.strip().lower()
+        cancelled = 0
+        with self._lock:
+            for job in self._jobs.values():
+                if job.status != "pending":
+                    continue
+                # Match against the primary principal and all alternates.
+                candidates = [job.principal] + (job.principal_candidates or [])
+                if any(lowered == (c or "").strip().lower() for c in candidates):
+                    job.status = "failed"
+                    job.completed_at = _utc_now()
+                    job.last_error = "Cancelled: user is being offboarded"
+                    cancelled += 1
+            if cancelled:
+                self._save()
+        return cancelled

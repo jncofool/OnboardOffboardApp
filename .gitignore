@@ -1,4 +1,5 @@
 .env
+.env.salt
 *.pyc
 __pycache__/
 data/license_jobs.json

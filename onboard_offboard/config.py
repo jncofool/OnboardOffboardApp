@@ -18,23 +18,58 @@ except ImportError:
     Fernet = None
 
 
-def _get_machine_key() -> bytes:
-    """Generate a consistent key based on machine characteristics."""
+def _get_machine_key(salt: bytes = b"") -> bytes:
+    """Generate a Fernet key from machine characteristics and an optional salt."""
     machine_id = os.environ.get('COMPUTERNAME', 'default') + os.environ.get('USERNAME', 'user')
-    return base64.urlsafe_b64encode(hashlib.sha256(machine_id.encode()).digest())
+    material = machine_id.encode() + salt
+    return base64.urlsafe_b64encode(hashlib.sha256(material).digest())
+
+
+_SALT_FILE = Path(".env.salt")
+
+
+def _get_secret_salt() -> bytes:
+    """Return a persistent random salt, creating it on first use.
+
+    Mixing a locally-stored random salt into the key means the encryption key
+    can no longer be derived purely from public machine/user names. The salt
+    file should be protected by filesystem permissions like any other secret.
+    """
+    try:
+        if _SALT_FILE.exists():
+            data = _SALT_FILE.read_bytes().strip()
+            if data:
+                return base64.b64decode(data)
+    except Exception:
+        pass
+    salt = os.urandom(16)
+    try:
+        _SALT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _SALT_FILE.write_bytes(base64.b64encode(salt))
+    except Exception:
+        # If we can't persist the salt, fall back to no-salt (legacy) behavior
+        # so we stay consistent across calls within this process/run.
+        return b""
+    return salt
 
 
 def _decrypt_value(encrypted_value: str) -> str:
     """Decrypt an encrypted value."""
     if not Fernet:
         return encrypted_value
+    if not encrypted_value.startswith('ENC:'):
+        return encrypted_value
     try:
-        if encrypted_value.startswith('ENC:'):
-            cipher = Fernet(_get_machine_key())
-            encrypted_data = base64.b64decode(encrypted_value[4:])
-            return cipher.decrypt(encrypted_data).decode()
+        encrypted_data = base64.b64decode(encrypted_value[4:])
     except Exception:
-        pass
+        return encrypted_value
+    # Try the salted key first, then fall back to the legacy (no-salt) key so
+    # secrets encrypted by older versions continue to decrypt.
+    for key in (_get_machine_key(_get_secret_salt()), _get_machine_key()):
+        try:
+            return Fernet(key).decrypt(encrypted_data).decode()
+        except Exception:
+            continue
     return encrypted_value
 
 
@@ -43,7 +78,7 @@ def _encrypt_value(plain_value: str) -> str:
     if not Fernet:
         return plain_value
     try:
-        cipher = Fernet(_get_machine_key())
+        cipher = Fernet(_get_machine_key(_get_secret_salt()))
         encrypted_data = cipher.encrypt(plain_value.encode())
         return 'ENC:' + base64.b64encode(encrypted_data).decode()
     except Exception:

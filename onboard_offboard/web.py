@@ -70,6 +70,41 @@ _RESERVED_AUTH_SCOPES = {"openid", "profile", "offline_access"}
 
 _PASSWORD_ALPHABET = string.ascii_letters + string.digits + "!@#$%^&*()-_=+[]{}"
 
+# Guards against launching duplicate background offboarding threads for the same
+# user. The offboarding thread sleeps up front and gives no immediate visible
+# feedback, so operators tend to click "Offboard" again, which previously spawned
+# a second racing thread that corrupted the already-offboarded account
+# (e.g. double "FE_" rename prefix, re-assigned temp license, cleared manager).
+_offboard_lock = threading.Lock()
+_active_offboards: set[str] = set()
+
+
+def _offboard_key(user_info: Dict[str, Any]) -> str:
+    """Stable identity key for an offboarding target (UPN/mail, lowercased)."""
+    return (user_info.get("userPrincipalName") or user_info.get("mail") or "").strip().lower()
+
+
+def _try_begin_offboard(user_info: Dict[str, Any]) -> bool:
+    """Reserve an offboarding slot for the user. Returns False if already running."""
+    key = _offboard_key(user_info)
+    if not key:
+        # No reliable identity to dedupe on; allow it through.
+        return True
+    with _offboard_lock:
+        if key in _active_offboards:
+            return False
+        _active_offboards.add(key)
+        return True
+
+
+def _end_offboard(user_info: Dict[str, Any]) -> None:
+    """Release the offboarding slot for the user."""
+    key = _offboard_key(user_info)
+    if not key:
+        return
+    with _offboard_lock:
+        _active_offboards.discard(key)
+
 
 def _generate_password(length: int = 16) -> str:
     length = max(10, int(length or 0))
@@ -266,6 +301,8 @@ def _merge_license_selections(selections: Iterable[LicenseSelection]) -> List[Li
 
 def create_app(config_path: Optional[Path | str] = None) -> Flask:
     """Create and configure the Flask application."""
+    import logging
+    from logging.handlers import RotatingFileHandler
 
     resolved_config_path = Path(config_path) if config_path else None
     ensure_default_config(resolved_config_path)
@@ -274,6 +311,21 @@ def create_app(config_path: Optional[Path | str] = None) -> Flask:
     app.config["SECRET_KEY"] = os.environ.get("ONBOARD_WEB_SECRET", "onboard-offboard-secret")
     app.config["CONFIG_PATH"] = resolved_config_path
     app.config["JSON_SORT_KEYS"] = False
+
+    # --- File logging ---
+    # Ensures app.logger output goes to portal.log (or the path set in
+    # ONBOARD_LOG_FILE) in addition to stderr. This makes background thread
+    # logging (offboarding, license worker) visible in the log file.
+    log_path = os.environ.get("ONBOARD_LOG_FILE", "portal.log")
+    file_handler = RotatingFileHandler(
+        log_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter(
+        "[%(asctime)s] %(levelname)s in %(module)s: %(message)s"
+    ))
+    app.logger.addHandler(file_handler)
+    app.logger.setLevel(logging.DEBUG)
 
     register_routes(app)
     return app
@@ -631,15 +683,6 @@ def register_routes(app: Flask) -> None:
                 attributes = _parse_attributes(request.form.get("attributes", ""))
                 selected_groups = _dedupe_preserve(request.form.getlist("groups"))
                 selected_apps = _dedupe_preserve(request.form.getlist("apps"))
-                selected_apps = _dedupe_preserve(request.form.getlist("apps"))
-                assignable_groups, skipped_groups = _filter_assignable_groups(selected_groups, config)
-                if skipped_groups:
-                    flash(
-                        "Skipped groups outside the managed scope: "
-                        + ", ".join(skipped_groups),
-                        "warning",
-                    )
-                selected_groups = assignable_groups
                 assignable_groups, skipped_groups = _filter_assignable_groups(selected_groups, config)
                 if skipped_groups:
                     flash(
@@ -1328,6 +1371,7 @@ def register_routes(app: Flask) -> None:
         search_results: List[Dict[str, Any]] = []
         selected_user: Optional[Dict[str, Any]] = None
         template_groups: List[str] = []
+        template_manager_hint: Optional[str] = None
         selected_groups = _dedupe_preserve(request.form.getlist("groups"))
         selected_apps = _dedupe_preserve(request.form.getlist("apps"))
         legacy_license_sku = (request.form.get("license_sku") or "").strip()
@@ -1353,34 +1397,43 @@ def register_routes(app: Flask) -> None:
                     search_results = client.search_users(query)
             except Exception as exc:
                 flash(f"Unable to search for users: {exc}", "error")
+            # Include cloud-only M365 accounts so they can be used as templates too.
+            _search_cloud_only_users(app, config, query, search_results)
 
         if user_dn:
-            try:
-                with ADClient(config.ldap) as client:
-                    selected_user = client.get_user(
-                        user_dn,
-                        attributes=[
-                            "manager",
-                            "title",
-                            "department",
-                            "company",
-                            "mail",
-                            "telephoneNumber",
-                            "mobile",
-                            "displayName",
-                            "sAMAccountName",
-                            "userPrincipalName",
-                            "physicalDeliveryOfficeName",
-                        ],
-                    )
-                    template_groups = client.get_user_groups(user_dn)
-                    app.logger.info(
-                        "Clone template AD groups loaded user_dn=%s group_count=%s",
-                        user_dn,
-                        len(template_groups or []),
-                    )
-            except Exception as exc:
-                flash(f"Unable to load selected user: {exc}", "error")
+            is_cloud_only_template = user_dn.startswith("M365:")
+            if is_cloud_only_template:
+                selected_user, cloud_manager_display = _load_cloud_only_template(app, config, user_dn)
+                if cloud_manager_display:
+                    # Surface the cloud manager as a search hint; operator confirms an AD manager.
+                    template_manager_hint = cloud_manager_display
+            else:
+                try:
+                    with ADClient(config.ldap) as client:
+                        selected_user = client.get_user(
+                            user_dn,
+                            attributes=[
+                                "manager",
+                                "title",
+                                "department",
+                                "company",
+                                "mail",
+                                "telephoneNumber",
+                                "mobile",
+                                "displayName",
+                                "sAMAccountName",
+                                "userPrincipalName",
+                                "physicalDeliveryOfficeName",
+                            ],
+                        )
+                        template_groups = client.get_user_groups(user_dn)
+                        app.logger.info(
+                            "Clone template AD groups loaded user_dn=%s group_count=%s",
+                            user_dn,
+                            len(template_groups or []),
+                        )
+                except Exception as exc:
+                    flash(f"Unable to load selected user: {exc}", "error")
 
             if selected_user and m365_status.get("configured"):
                 try:
@@ -1525,6 +1578,11 @@ def register_routes(app: Flask) -> None:
                 except Exception:
                     template_manager_display = template_manager_dn
 
+        # Cloud-only templates have no AD manager DN; offer the cloud manager's
+        # name as a search hint so the operator can pick the matching AD manager.
+        if not template_manager_display and template_manager_hint:
+            template_manager_display = template_manager_hint
+
         email_domain = _email_domain_from_config(config)
         if not selected_groups and template_groups:
             selected_groups = _dedupe_preserve(template_groups)
@@ -1563,6 +1621,12 @@ def register_routes(app: Flask) -> None:
                 office_name = request.form.get("office", "").strip()
                 attributes = _parse_attributes(request.form.get("attributes", ""))
                 selected_groups = _dedupe_preserve(request.form.getlist("groups"))
+
+                # A cloud-only template (M365:<id>) produces a cloud-only account
+                # created directly in Entra/Azure AD via Graph, mirroring the
+                # template's realm. Hybrid/AD templates continue to create in AD.
+                source_dn = (request.form.get("source_dn") or "").strip()
+                is_cloud_clone = source_dn.startswith("M365:")
 
                 parsed_form_selections = _parse_license_selections(request.form.getlist("license_selection"))
                 legacy_license_sku = (request.form.get("license_sku") or "").strip()
@@ -1608,7 +1672,9 @@ def register_routes(app: Flask) -> None:
                 if not manager_dn:
                     manager_dn = role.default_manager_dn or template_manager_dn
 
-                if not manager_dn:
+                # For AD clones a manager DN is mandatory. For cloud clones the
+                # manager is optional and resolved against M365 separately below.
+                if not manager_dn and not is_cloud_clone:
                     raise ValueError("A manager must be selected or defined in the job role.")
 
                 if telephone_number:
@@ -1654,11 +1720,84 @@ def register_routes(app: Flask) -> None:
                 job_role = replace(role, user_ou=chosen_ou or role.user_ou)
 
                 manager_email = None
-                with ADClient(config.ldap) as client:
-                    result = client.create_user(employee, job_role, password=password)
-                    manager_email = _lookup_manager_email(client, manager_dn)
+                created_cloud_user = False
+                if is_cloud_clone:
+                    # Create a cloud-only account directly in Entra/Azure AD.
+                    m365_client = _get_m365_client(app, config)
+                    if not m365_client:
+                        raise RuntimeError(
+                            "Microsoft 365 client is not available; cannot clone a cloud-only user."
+                        )
+                    upn = (_derive_email(username, email_domain) or email).strip()
+                    cloud_extra = {
+                        "givenName": first_name,
+                        "surname": last_name,
+                        "jobTitle": attributes.get("title") or role_name or None,
+                        "department": attributes.get("department") or None,
+                        "companyName": company_name or attributes.get("company") or None,
+                        "officeLocation": office_name
+                        or attributes.get("physicalDeliveryOfficeName")
+                        or None,
+                        "mobilePhone": mobile_number or attributes.get("mobile") or None,
+                        "mail": email or None,
+                    }
+                    if telephone_number:
+                        cloud_extra["businessPhones"] = [telephone_number]
+                    created = m365_client.create_user(
+                        display_name=employee.display_name,
+                        user_principal_name=upn,
+                        password=password,
+                        usage_location=config.m365.default_usage_location or None,
+                        extra=cloud_extra,
+                    )
+                    new_user_id = created.get("id")
+                    app.logger.info(
+                        "Clone: created cloud-only user %s (id=%s)", upn, new_user_id
+                    )
+                    created_cloud_user = True
 
-                _trigger_sync(config)
+                    # Resolve and set the manager in M365 if one was chosen.
+                    if manager_dn and new_user_id:
+                        try:
+                            manager_lookup = manager_dn
+                            if manager_dn.upper().startswith("CN="):
+                                with ADClient(config.ldap) as client:
+                                    manager_info = client.get_user(
+                                        manager_dn,
+                                        attributes=["mail", "userPrincipalName"],
+                                    )
+                                manager_lookup = (
+                                    (manager_info or {}).get("userPrincipalName")
+                                    or (manager_info or {}).get("mail")
+                                    or ""
+                                )
+                                manager_email = manager_lookup or None
+                            if manager_lookup:
+                                manager_user = m365_client.find_user(
+                                    manager_lookup, select="id,mail"
+                                )
+                                if manager_user and manager_user.get("id"):
+                                    m365_client.set_user_manager(
+                                        new_user_id, manager_user["id"]
+                                    )
+                                    manager_email = manager_email or manager_user.get("mail")
+                        except Exception as mgr_exc:
+                            app.logger.warning(
+                                "Clone: unable to set manager for cloud user %s: %s",
+                                upn,
+                                mgr_exc,
+                            )
+                    result = {
+                        "sAMAccountName": username,
+                        "distinguished_name": f"M365:{new_user_id}",
+                        "userPrincipalName": upn,
+                    }
+                else:
+                    with ADClient(config.ldap) as client:
+                        result = client.create_user(employee, job_role, password=password)
+                        manager_email = _lookup_manager_email(client, manager_dn)
+
+                    _trigger_sync(config)
 
                 all_assigned_groups = ad_groups + azure_groups
                 app.logger.info(
@@ -1666,6 +1805,16 @@ def register_routes(app: Flask) -> None:
                     ad_groups,
                     azure_groups,
                 )
+
+                # AD (DN) groups can't be applied to a cloud-only account; warn so
+                # the operator knows to manage those memberships elsewhere.
+                if is_cloud_clone and ad_groups:
+                    flash(
+                        "Cloud-only account created. On-premises AD groups were skipped "
+                        "(not applicable to cloud accounts): "
+                        + ", ".join(_group_display_name(dn) for dn in ad_groups),
+                        "warning",
+                    )
 
                 try:
                     seed_status = _auto_seed_job_role(
@@ -1730,7 +1879,10 @@ def register_routes(app: Flask) -> None:
                             "info",
                         )
                 flash(
-                    f"Cloned user into account {result.get('sAMAccountName')}.",
+                    "Cloned cloud-only user into account "
+                    f"{result.get('userPrincipalName') or result.get('sAMAccountName')}."
+                    if created_cloud_user
+                    else f"Cloned user into account {result.get('sAMAccountName')}.",
                     "success",
                 )
                 session["last_credentials"] = {
@@ -1769,6 +1921,7 @@ def register_routes(app: Flask) -> None:
             query=query,
             search_results=search_results,
             selected_user=selected_user,
+            is_cloud_template=bool(user_dn and user_dn.startswith("M365:")),
             default_attributes=attribute_defaults,
             default_manager=default_manager,
             default_manager_label=default_manager_label,
@@ -1811,44 +1964,10 @@ def register_routes(app: Flask) -> None:
             except Exception as exc:
                 app.logger.error("Delete page: AD search failed: %s", exc)
                 flash(f"Unable to search for users: {exc}", "error")
-            
+
             app.logger.info("Delete page: M365 configured=%s", config.m365.has_credentials)
-            if config.m365.has_credentials:
-                try:
-                    m365_client = _get_m365_client(app, config)
-                    app.logger.info("Delete page: M365 client created=%s", m365_client is not None)
-                    if m365_client:
-                        app.logger.info("Delete page: searching M365 for '%s'", query)
-                        # Search M365 users with partial match
-                        escaped = query.replace("'", "''")
-                        filter_str = f"startswith(displayName,'{escaped}') or startswith(userPrincipalName,'{escaped}') or startswith(mail,'{escaped}')"
-                        params = {
-                            "$filter": filter_str,
-                            "$select": "id,userPrincipalName,displayName,mail,onPremisesSyncEnabled",
-                            "$top": "25"
-                        }
-                        result = m365_client._request("GET", "/users", params=params)
-                        m365_users = result.get("value", [])
-                        app.logger.info("Delete page: found %s M365 users", len(m365_users))
-                        
-                        for graph_user in m365_users:
-                            is_cloud_only = not graph_user.get("onPremisesSyncEnabled")
-                            app.logger.info("Delete page: user %s cloud-only=%s", graph_user.get("displayName"), is_cloud_only)
-                            if is_cloud_only:
-                                upn = graph_user.get("userPrincipalName", "")
-                                already_in_results = any(r.get("mail") == upn or r.get("userPrincipalName") == upn for r in search_results)
-                                if not already_in_results:
-                                    cloud_user = {
-                                        "distinguishedName": f"M365:{graph_user['id']}",
-                                        "displayName": graph_user.get("displayName"),
-                                        "sAMAccountName": graph_user.get("userPrincipalName", "").split("@")[0],
-                                        "mail": graph_user.get("userPrincipalName"),
-                                        "userPrincipalName": graph_user.get("userPrincipalName"),
-                                    }
-                                    search_results.append(cloud_user)
-                                    app.logger.info("Delete page: added cloud-only user to results: %s", cloud_user.get("displayName"))
-                except Exception as exc:
-                    app.logger.error("Delete page: M365 user search failed: %s", exc)
+            # Include cloud-only M365 accounts so they can be offboarded/deleted too.
+            _search_cloud_only_users(app, config, query, search_results)
 
         if request.method == "POST":
             user_dn = request.form.get("user_dn")
@@ -1877,9 +1996,40 @@ def register_routes(app: Flask) -> None:
                             deleted = client.delete_user(user_dn)
                         if not deleted:
                             raise RuntimeError("User was not deleted from AD.")
+
+                        # Cancel any pending license/group jobs for this user so the
+                        # license worker doesn't race with the sync and write to the
+                        # user in M365 while AD Connect is trying to delete them.
+                        user_email = (
+                            (user_info or {}).get("userPrincipalName")
+                            or (user_info or {}).get("mail")
+                            or ""
+                        ).strip()
+                        if user_email:
+                            try:
+                                store = _get_license_store(app, config)
+                                cancelled = store.cancel_jobs_for_principal(user_email)
+                                if cancelled:
+                                    app.logger.info(
+                                        "Cancelled %d pending license job(s) for %s before sync",
+                                        cancelled, user_email,
+                                    )
+                            except Exception as cancel_exc:
+                                app.logger.warning(
+                                    "Could not cancel license jobs for %s: %s",
+                                    user_email, cancel_exc,
+                                )
+
                         _trigger_sync(config)
                     
                     if config.m365.has_credentials and user_info:
+                        if not _try_begin_offboard(user_info):
+                            flash(
+                                f"Offboarding is already running for {user_info.get('displayName')}. "
+                                "Please wait for it to finish before trying again.",
+                                "warning",
+                            )
+                            return redirect(url_for("delete_user"))
                         flash(f"Offboarding started for {user_info.get('displayName')}. This process will take several minutes to complete in the background.", "info")
                         threading.Thread(
                             target=_offboard_m365_user_background,
@@ -1937,6 +2087,9 @@ def _get_m365_client(app: Flask, config: AppConfig) -> Optional[M365Client]:
         m365_config.client_secret,
         str(m365_config.sku_cache_file),
         m365_config.cache_ttl_minutes,
+        m365_config.cert_thumbprint,
+        m365_config.exo_organization,
+        m365_config.default_usage_location,
     )
     cached_signature = app.config.get("_M365_CONFIG_SIGNATURE")
     cached_client = app.config.get("_M365_CLIENT")
@@ -2920,10 +3073,143 @@ def _separate_groups(groups: Iterable[str]) -> Tuple[List[str], List[str]]:
     return ad_groups, azure_groups
 
 
-def _trigger_sync(config: AppConfig) -> None:
+def _search_cloud_only_users(
+    app: Flask,
+    config: AppConfig,
+    query: str,
+    existing: List[Dict[str, Any]],
+) -> None:
+    """Append cloud-only (non directory-synced) M365 users matching ``query``.
+
+    Mutates ``existing`` in place, mirroring the shape returned by
+    ``ADClient.search_users`` so hybrid and cloud-only users render identically.
+    Cloud-only users are tagged with an ``M365:<id>`` distinguished name so the
+    rest of the flow can detect them.
+    """
+    if not config.m365.has_credentials:
+        return
     try:
+        client = _get_m365_client(app, config)
+        if not client:
+            return
+        escaped = query.replace("'", "''")
+        filter_str = (
+            f"startswith(displayName,'{escaped}') "
+            f"or startswith(userPrincipalName,'{escaped}') "
+            f"or startswith(mail,'{escaped}')"
+        )
+        params = {
+            "$filter": filter_str,
+            "$select": "id,userPrincipalName,displayName,mail,onPremisesSyncEnabled",
+            "$top": "25",
+        }
+        result = client._request("GET", "/users", params=params)
+        for graph_user in result.get("value", []):
+            # Hybrid/synced users are already covered by the AD search.
+            if graph_user.get("onPremisesSyncEnabled"):
+                continue
+            upn = graph_user.get("userPrincipalName", "") or ""
+            already_present = any(
+                r.get("mail") == upn or r.get("userPrincipalName") == upn
+                for r in existing
+            )
+            if already_present:
+                continue
+            existing.append(
+                {
+                    "distinguishedName": f"M365:{graph_user['id']}",
+                    "displayName": graph_user.get("displayName"),
+                    "sAMAccountName": upn.split("@")[0] if upn else None,
+                    "mail": upn,
+                    "userPrincipalName": upn,
+                }
+            )
+    except Exception as exc:
+        app.logger.error("Cloud-only user search failed for '%s': %s", query, exc)
+
+
+def _load_cloud_only_template(
+    app: Flask,
+    config: AppConfig,
+    user_dn: str,
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Load a cloud-only (M365) user so it can be used as a clone template.
+
+    Returns ``(selected_user, manager_display)`` where ``selected_user`` uses the
+    same AD-style attribute keys produced by ``ADClient.get_user`` so the rest of
+    the clone flow treats a cloud-only template exactly like a hybrid one.
+
+    The cloud manager is returned as a display string only (not an AD DN); the
+    operator confirms/selects a manager that exists on-prem, since the new
+    account is always created in Active Directory.
+    """
+    user_id = user_dn.replace("M365:", "", 1)
+    client = _get_m365_client(app, config)
+    if not client:
+        flash("Microsoft 365 client not available to load the cloud-only template.", "error")
+        return None, None
+
+    try:
+        graph_user = client.get_user(
+            user_id,
+            select=(
+                "id,displayName,userPrincipalName,mail,jobTitle,department,"
+                "companyName,officeLocation,mobilePhone,businessPhones"
+            ),
+        )
+    except Exception as exc:
+        flash(f"Unable to load selected user: {exc}", "error")
+        return None, None
+
+    upn = (graph_user.get("userPrincipalName") or "").strip()
+    business_phones = graph_user.get("businessPhones") or []
+    selected_user: Dict[str, Any] = {
+        "distinguishedName": user_dn,
+        "displayName": graph_user.get("displayName"),
+        "sAMAccountName": upn.split("@")[0] if upn else None,
+        "userPrincipalName": upn or None,
+        "mail": graph_user.get("mail") or upn or None,
+        "title": graph_user.get("jobTitle"),
+        "department": graph_user.get("department"),
+        "company": graph_user.get("companyName"),
+        "physicalDeliveryOfficeName": graph_user.get("officeLocation"),
+        "mobile": graph_user.get("mobilePhone"),
+        "telephoneNumber": business_phones[0] if business_phones else None,
+        # Cloud manager is not an AD DN; leave unset so an AD manager is chosen.
+        "manager": None,
+    }
+
+    manager_display: Optional[str] = None
+    try:
+        manager_info = client.get_user_manager(graph_user["id"])
+        if manager_info:
+            manager_display = (
+                manager_info.get("displayName")
+                or manager_info.get("mail")
+                or manager_info.get("userPrincipalName")
+            )
+    except Exception as exc:
+        app.logger.warning(
+            "Unable to load manager for cloud-only template %s: %s", upn or user_id, exc
+        )
+
+    return selected_user, manager_display
+
+
+def _trigger_sync(config: AppConfig) -> None:
+    from flask import current_app
+    try:
+        if current_app:
+            current_app.logger.info("Triggering directory sync command: %s", config.sync.command or "(none)")
         run_sync_command(config.sync)
+        if current_app:
+            current_app.logger.info(
+                "Directory sync command returned successfully. Note: Start-ADSyncSyncCycle "
+                "only initiates the cycle; the actual Import/Sync/Export stages take 10-30s to complete."
+            )
     except RuntimeError as exc:
+        if current_app:
+            current_app.logger.error("Directory sync failed: %s", exc)
         flash(f"Directory sync reported a problem: {exc}", "error")
 
 
@@ -2931,7 +3217,11 @@ def _offboard_m365_user_background(app: Flask, config: AppConfig, user_info: Dic
     """Background thread wrapper for M365 offboarding."""
     with app.app_context():
         try:
-            app.logger.info("Background M365 offboarding thread started for %s", user_info.get("displayName"))
+            app.logger.info(
+                "=== BACKGROUND OFFBOARDING STARTED === User: %s | Email: %s",
+                user_info.get("displayName"),
+                user_info.get("userPrincipalName") or user_info.get("mail"),
+            )
             print(f"\n{'='*80}")
             print(f"BACKGROUND OFFBOARDING THREAD STARTED")
             print(f"User: {user_info.get('displayName')}")
@@ -2939,72 +3229,119 @@ def _offboard_m365_user_background(app: Flask, config: AppConfig, user_info: Dic
             print(f"{'='*80}\n")
             _offboard_m365_user(app, config, user_info)
         except Exception as exc:
-            app.logger.exception("Background M365 offboarding failed: %s", exc)
+            app.logger.exception("=== BACKGROUND OFFBOARDING FAILED === %s", exc)
             print(f"\n{'='*80}")
             print(f"BACKGROUND OFFBOARDING FAILED: {exc}")
             print(f"{'='*80}\n")
+        finally:
+            _end_offboard(user_info)
 
 
 def _offboard_m365_user(app: Flask, config: AppConfig, user_info: Dict[str, Any]) -> None:
     """Comprehensive M365 offboarding: restore, assign license, wait for mailbox, convert to shared, remove licenses/groups, block sign-in, rename."""
     import time
     from datetime import datetime
-    
+
+    def _log(msg: str, *args: Any, level: str = "info") -> None:
+        """Log to both app.logger and stdout for full visibility."""
+        formatted = msg % args if args else msg
+        print(formatted)
+        getattr(app.logger, level)(formatted)
+
     client = _get_m365_client(app, config)
     if not client:
         raise RuntimeError("M365 client not available")
-    
+
     lookup = (user_info.get("userPrincipalName") or user_info.get("mail") or "").strip()
     if not lookup:
         raise RuntimeError("User has no email/UPN for M365 lookup")
-    
-    app.logger.info("Starting M365 offboarding for %s", lookup)
-    print(f"\n=== M365 OFFBOARDING: {lookup} ===")
-    print("Waiting 90s for AD sync to complete...")
-    time.sleep(90)
-    
-    print("Looking for user in M365...")
+
+    _log("=== M365 OFFBOARDING: %s ===", lookup)
+
+    # For hybrid users: wait until the AD sync has propagated the deletion to
+    # Azure AD. Instead of a fixed 90s sleep we poll until the user either
+    # disappears from active users, becomes cloud-only (no longer synced), or
+    # shows up in deleted items. This adapts to however long Microsoft takes.
+    _log("Step 1/8: Waiting for AD sync to propagate deletion...")
+    _SYNC_POLL_INTERVAL = 30  # seconds between checks
+    _SYNC_MAX_WAIT = 600  # 10 minutes maximum
+    elapsed = 0
+
+    # Give the sync command a head start before we start hammering Graph.
+    _log("  Initial 30s wait for sync to begin propagating...")
+    time.sleep(30)
+    elapsed += 30
+
+    sync_retried = False
+    while elapsed < _SYNC_MAX_WAIT:
+        try:
+            check_user = client.find_user(lookup, select="id,onPremisesSyncEnabled")
+            if not check_user:
+                _log("  User no longer in active users after %ds — sync propagated", elapsed)
+                break
+            if not check_user.get("onPremisesSyncEnabled"):
+                _log("  User is now cloud-only (no longer synced) after %ds", elapsed)
+                break
+            _log("  User still active+synced after %ds, waiting %ds...", elapsed, _SYNC_POLL_INTERVAL)
+        except Exception as poll_exc:
+            _log("  Poll error after %ds: %s — treating as removed", elapsed, poll_exc)
+            break
+        # If we've waited 2+ minutes and the user is still synced, the export
+        # may have failed. Trigger a second sync to retry the export.
+        if not sync_retried and elapsed >= 120:
+            _log("  User still present after %ds — triggering a second sync in case export failed...", elapsed, level="warning")
+            try:
+                run_sync_command(config.sync)
+                _log("  Second sync triggered successfully")
+            except Exception as retry_exc:
+                _log("  Second sync failed: %s", retry_exc, level="warning")
+            sync_retried = True
+        time.sleep(_SYNC_POLL_INTERVAL)
+        elapsed += _SYNC_POLL_INTERVAL
+    else:
+        _log("  WARNING: Sync did not propagate within %ds — proceeding anyway (may fail for synced properties)", _SYNC_MAX_WAIT, level="warning")
+
+    # --- Step 2: Find user ---
+    _log("Step 2/8: Looking for user in M365...")
     graph_user = None
     user_id = None
     is_cloud_only = False
-    
-    # First try to find as active user (365-only accounts)
+
     try:
-        print("Checking active users...")
-        graph_user = client.find_user(lookup, select="id,userPrincipalName,displayName,mail,manager,onPremisesSyncEnabled")
+        _log("  Checking active users...")
+        graph_user = client.find_user(lookup, select="id,userPrincipalName,displayName,mail,manager,onPremisesSyncEnabled,accountEnabled")
         if graph_user:
             user_id = graph_user["id"]
             is_cloud_only = not graph_user.get("onPremisesSyncEnabled")
-            print(f"Found active user: {user_id} (UPN: {graph_user.get('userPrincipalName')}, Cloud-only: {is_cloud_only})")
+            _log("  Found active user: %s (UPN: %s, Cloud-only: %s)", user_id, graph_user.get("userPrincipalName"), is_cloud_only)
     except Exception as active_exc:
-        print(f"Not found in active users: {active_exc}")
-    
-    # If not found as active, check deleted items (hybrid accounts)
+        _log("  Not found in active users: %s", active_exc)
+
     if not graph_user:
         try:
-            print("Checking deleted items...")
+            _log("  Checking deleted items...")
             deleted_users = client._request("GET", "/directory/deletedItems/microsoft.graph.user")
             for deleted in deleted_users.get("value", []):
                 deleted_upn = (deleted.get("userPrincipalName") or "").lower()
                 deleted_mail = (deleted.get("mail") or "").lower()
                 lookup_lower = lookup.lower()
-                
+
                 if deleted_upn == lookup_lower or deleted_mail == lookup_lower or lookup_lower in deleted_upn:
                     user_id = deleted["id"]
-                    print(f"Found in deleted items: {user_id} (UPN: {deleted.get('userPrincipalName')})")
-                    print("Restoring user...")
+                    _log("  Found in deleted items: %s (UPN: %s)", user_id, deleted.get("userPrincipalName"))
+                    _log("  Restoring user...")
                     client.restore_user(user_id)
-                    print("Waiting for restore to complete...")
+                    _log("  Waiting 30s for restore to propagate...")
                     time.sleep(30)
-                    
+
                     for attempt in range(5):
                         try:
                             graph_user = client.get_user(user_id, select="id,userPrincipalName,displayName,mail,manager")
-                            print(f"User restored: {graph_user.get('userPrincipalName')}")
+                            _log("  User restored successfully: %s", graph_user.get("userPrincipalName"))
                             break
                         except Exception as get_exc:
                             if attempt < 4:
-                                print(f"  Restore not ready, waiting 10s... (attempt {attempt + 1}/5)")
+                                _log("  Restore not ready, waiting 10s... (attempt %d/5)", attempt + 1)
                                 time.sleep(10)
                             else:
                                 raise
@@ -3013,25 +3350,43 @@ def _offboard_m365_user(app: Flask, config: AppConfig, user_info: Dict[str, Any]
                 raise RuntimeError(f"User {lookup} not found in M365 active users or deleted items")
         except Exception as restore_exc:
             raise RuntimeError(f"Failed to find/restore user: {restore_exc}")
-    
+
     display_name = graph_user.get("displayName", "")
-    
-    # Get manager information
+
+    # Detect already-offboarded user
+    account_enabled = graph_user.get("accountEnabled")
+    if account_enabled is None:
+        try:
+            account_enabled = client.get_user(user_id, select="accountEnabled").get("accountEnabled")
+        except Exception:
+            account_enabled = None
+    already_offboarded = bool(display_name.startswith("FE_")) or account_enabled is False
+    if already_offboarded:
+        _log(
+            "  NOTE: User appears already offboarded (name='%s', accountEnabled=%s). "
+            "Skipping license/mailbox provisioning; will re-assert cleanup steps.",
+            display_name, account_enabled,
+        )
+
+    # --- Step 3: Resolve manager ---
+    _log("Step 3/8: Resolving manager...")
     manager_id = None
     manager_email = None
-    
+
     try:
         manager_info = client.get_user_manager(user_id)
         if manager_info:
             manager_id = manager_info.get("id")
             manager_email = manager_info.get("mail")
-            print(f"Manager found via Graph API: {manager_email}")
+            _log("  Manager found via Graph API: %s (id: %s)", manager_email, manager_id)
+        else:
+            _log("  No manager set in M365")
     except Exception as mgr_exc:
-        print(f"Could not get manager from Graph API: {mgr_exc}")
-    
-    # Fallback: try AD manager if hybrid account
+        _log("  Could not get manager from Graph API: %s", mgr_exc, level="warning")
+
     if not manager_id and user_info.get("manager"):
         manager_dn = user_info["manager"]
+        _log("  Trying AD manager fallback: %s", manager_dn)
         try:
             with ADClient(config.ldap) as ad_client:
                 manager_info = ad_client.get_user(manager_dn, attributes=["mail", "userPrincipalName"])
@@ -3041,93 +3396,105 @@ def _offboard_m365_user(app: Flask, config: AppConfig, user_info: Dict[str, Any]
                     if manager_user:
                         manager_id = manager_user["id"]
                         manager_email = manager_user.get("mail")
-        except Exception:
-            pass
-    
-    # Final attempt: if we have manager_id but no email
+                        _log("  AD manager resolved in M365: %s", manager_email)
+        except Exception as ad_mgr_exc:
+            _log("  AD manager fallback failed: %s", ad_mgr_exc, level="warning")
+
     if manager_id and not manager_email:
         try:
             manager_user = client.get_user(manager_id, select="mail")
             manager_email = manager_user.get("mail")
-        except Exception:
-            pass
-    
-    print(f"Manager: {manager_email or 'Not found'}")
-    
+        except Exception as mgr_email_exc:
+            _log("  Manager email lookup failed: %s", mgr_email_exc, level="debug")
+
+    _log("  Final manager: %s", manager_email or "Not found")
+
+    # --- Step 4: License check and mailbox provisioning ---
+    _log("Step 4/8: Checking licenses and preparing mailbox...")
     user_licenses = []
     try:
         current_user = client.get_user(user_id, select="assignedLicenses")
         user_licenses = current_user.get("assignedLicenses", [])
-        print(f"User has {len(user_licenses)} licenses")
+        _log("  User has %d license(s)", len(user_licenses))
     except Exception as lic_check_exc:
-        print(f"  Could not check licenses: {lic_check_exc}")
-    
+        _log("  Could not check licenses: %s", lic_check_exc, level="warning")
+
     if not user_licenses:
-        print("No licenses found, assigning temporary E3 license for mailbox access...")
-        try:
-            if not client.get_user(user_id, select="usageLocation").get("usageLocation"):
-                client.update_user(user_id, usageLocation=config.m365.default_usage_location or "US")
-                time.sleep(15)
-            client.assign_license(user_id, "05e9a617-0261-4cee-bb44-138d3ef5d965", [])
-            print("  Assigned E3 license, waiting 120s for mailbox provisioning...")
-            time.sleep(120)
-        except Exception as temp_lic_exc:
-            print(f"  Could not assign temporary license: {temp_lic_exc}")
-    else:
-        print("Licenses present, waiting 90s for mailbox to be fully ready...")
-        time.sleep(90)
-    
-    print("Checking mailbox status...")
-    mailbox_ready = False
-    for check_attempt in range(5):
-        try:
-            result = _check_mailbox_exists(app, config, lookup)
-            if result:
-                print(f"  Mailbox confirmed ready")
-                mailbox_ready = True
-                break
-        except Exception as check_exc:
-            print(f"  Check attempt {check_attempt + 1}/5: {check_exc}")
-        if check_attempt < 4:
-            print(f"  Waiting 30s before next check...")
-            time.sleep(30)
-    
-    if not mailbox_ready:
-        print("  WARNING: Could not confirm mailbox is ready, proceeding anyway...")
-    
-    if config.m365.has_exo_credentials and manager_email:
-        print("Converting mailbox to shared and setting up forwarding...")
-        for attempt in range(5):
+        if already_offboarded:
+            _log("  No licenses + already offboarded → skipping temp E3 assignment")
+        else:
+            _log("  No licenses found, assigning temporary E3 for mailbox access...")
             try:
-                _convert_mailbox_to_shared_and_forward(app, config, lookup, manager_email)
-                print("  SUCCESS: Mailbox converted and forwarding enabled")
-                break
-            except Exception as mb_exc:
-                if attempt < 4:
-                    print(f"  Attempt {attempt + 1} failed, waiting 45s and retrying...")
-                    time.sleep(45)
-                else:
-                    print(f"  FAILED after 5 attempts: {mb_exc}")
-                    app.logger.error("Mailbox conversion failed for %s: %s", lookup, mb_exc)
+                if not client.get_user(user_id, select="usageLocation").get("usageLocation"):
+                    _log("  Setting usageLocation to %s", config.m365.default_usage_location or "US")
+                    client.update_user(user_id, usageLocation=config.m365.default_usage_location or "US")
+                    time.sleep(15)
+                client.assign_license(user_id, "05e9a617-0261-4cee-bb44-138d3ef5d965", [])
+                _log("  Assigned E3 license, waiting 120s for mailbox provisioning...")
+                time.sleep(120)
+            except Exception as temp_lic_exc:
+                _log("  Could not assign temporary license: %s", temp_lic_exc, level="error")
     else:
-        print("Skipping mailbox conversion (Exchange Online not configured or no manager)")
-    
-    print("Removing all licenses...")
+        _log("  Licenses present, waiting 90s for mailbox to be fully ready...")
+        time.sleep(90)
+
+    # --- Step 5: Mailbox conversion ---
+    _log("Step 5/8: Mailbox conversion...")
+    if already_offboarded:
+        _log("  Skipping (user already offboarded)")
+    else:
+        _log("  Checking mailbox status...")
+        mailbox_ready = False
+        for check_attempt in range(5):
+            try:
+                result = _check_mailbox_exists(app, config, lookup)
+                if result:
+                    _log("  Mailbox confirmed ready")
+                    mailbox_ready = True
+                    break
+            except Exception as check_exc:
+                _log("  Check attempt %d/5 failed: %s", check_attempt + 1, check_exc)
+            if check_attempt < 4:
+                _log("  Waiting 30s before next check...")
+                time.sleep(30)
+
+        if not mailbox_ready:
+            _log("  WARNING: Could not confirm mailbox is ready, proceeding anyway...", level="warning")
+
+        if config.m365.has_exo_credentials and manager_email:
+            _log("  Converting mailbox to shared + forwarding to %s...", manager_email)
+            for attempt in range(5):
+                try:
+                    _convert_mailbox_to_shared_and_forward(app, config, lookup, manager_email)
+                    _log("  SUCCESS: Mailbox converted and forwarding enabled")
+                    break
+                except Exception as mb_exc:
+                    if attempt < 4:
+                        _log("  Attempt %d/5 failed: %s — retrying in 45s...", attempt + 1, mb_exc)
+                        time.sleep(45)
+                    else:
+                        _log("  FAILED after 5 attempts: %s", mb_exc, level="error")
+        elif not config.m365.has_exo_credentials:
+            _log("  Skipping: Exchange Online not configured (no cert_thumbprint/exo_organization)")
+        elif not manager_email:
+            _log("  Skipping: No manager found for forwarding")
+
+    # --- Step 6: Remove licenses ---
+    _log("Step 6/8: Removing all licenses...")
     try:
         client.remove_all_licenses(user_id)
-        print("  SUCCESS: All licenses removed")
+        _log("  SUCCESS: All licenses removed")
     except Exception as lic_exc:
-        print(f"  FAILED: {lic_exc}")
-        app.logger.error("License removal failed for %s: %s", lookup, lic_exc)
-    
-    print("Removing all group memberships...")
+        _log("  FAILED: %s", lic_exc, level="error")
+
+    # --- Step 7: Remove group memberships ---
+    _log("Step 7/8: Removing all group memberships...")
     removed_count = 0
     try:
         group_ids = client.get_user_groups(user_id)
-        print(f"  Found {len(group_ids)} groups to process")
-        
+        _log("  Found %d groups to process", len(group_ids))
+
         for idx, group_id in enumerate(group_ids, 1):
-            print(f"\n  Group {idx}/{len(group_ids)}: {group_id}")
             try:
                 group_details = client.get_group(group_id)
                 group_name = group_details.get("displayName") or group_id
@@ -3136,90 +3503,62 @@ def _offboard_m365_user(app: Flask, config: AppConfig, user_info: Dict[str, Any]
                 security_enabled = group_details.get("securityEnabled")
                 group_types = group_details.get("groupTypes") or []
                 membership_rule = group_details.get("membershipRule")
-                
-                print(f"    Name: {group_name}")
-                print(f"    OnPremSync: {on_prem_synced}, Mail: {mail_enabled}, Security: {security_enabled}")
-                print(f"    Types: {group_types}, Dynamic: {bool(membership_rule)}")
-                
+
+                _log("  Group %d/%d: %s (id: %s)", idx, len(group_ids), group_name, group_id)
+                _log("    OnPremSync=%s Mail=%s Security=%s Types=%s Dynamic=%s",
+                     on_prem_synced, mail_enabled, security_enabled, group_types, bool(membership_rule))
+
                 if on_prem_synced:
-                    print(f"    SKIPPED: On-premises synced (managed in AD)")
-                    app.logger.warning(
-                        "SKIPPED: On-premises synced group %s (%s) - must be managed in AD",
-                        group_name,
-                        group_id,
-                    )
+                    _log("    SKIPPED: On-premises synced (managed in AD)", level="warning")
                     continue
-                
+
                 if membership_rule or "DynamicMembership" in group_types:
-                    print(f"    SKIPPED: Dynamic group (rule-based membership)")
-                    app.logger.warning(
-                        "SKIPPED: Dynamic group %s (%s) - membership is rule-based",
-                        group_name,
-                        group_id,
-                    )
+                    _log("    SKIPPED: Dynamic group (rule-based membership)", level="warning")
                     continue
-                
+
                 is_distribution_list = mail_enabled and not security_enabled and "Unified" not in group_types
                 if is_distribution_list:
                     if config.m365.has_exo_credentials:
-                        print(f"    Removing from Distribution List via Exchange Online...")
+                        _log("    Removing from Distribution List via Exchange Online...")
                         try:
                             _remove_from_distribution_list(app, config, lookup, group_id)
-                            print(f"    SUCCESS: Removed from DL {group_name}")
+                            _log("    SUCCESS: Removed from DL %s", group_name)
                             removed_count += 1
-                            app.logger.info("Removed %s from distribution list %s via Exchange Online.", lookup, group_name)
                         except Exception as dl_exc:
-                            print(f"    FAILED: {dl_exc}")
-                            app.logger.error("Failed to remove %s from DL %s: %s", lookup, group_name, dl_exc)
+                            _log("    FAILED to remove from DL: %s", dl_exc, level="error")
                     else:
-                        print(f"    SKIPPED: Distribution list (Exchange Online not configured)")
-                        app.logger.warning(
-                            "SKIPPED: Distribution list %s (%s) - Exchange Online credentials not configured",
-                            group_name,
-                            group_id,
-                        )
+                        _log("    SKIPPED: Distribution list (Exchange Online not configured)", level="warning")
                     continue
-                
-                print(f"    Removing user from group...")
+
+                _log("    Removing user from group...")
                 client.remove_user_from_group(user_id, group_id)
-                print(f"    SUCCESS: Removed from {group_name}")
+                _log("    SUCCESS: Removed from %s", group_name)
                 removed_count += 1
-                app.logger.info("Successfully removed %s from Azure group %s (%s).", lookup, group_name, group_id)
             except M365ClientError as exc:
-                print(f"    FAILED: {exc}")
-                app.logger.error(
-                    "FAILED to remove %s from Azure group %s: %s",
-                    lookup,
-                    group_id,
-                    exc,
-                )
+                _log("    FAILED: %s", exc, level="error")
             except Exception as exc:
-                print(f"    UNEXPECTED ERROR: {exc}")
-                app.logger.exception(
-                    "Unexpected error removing %s from Azure group %s: %s",
-                    lookup,
-                    group_id,
-                    exc,
-                )
-        
-        print(f"\n  COMPLETE: Removed from {removed_count}/{len(group_ids)} groups")
+                _log("    UNEXPECTED ERROR: %s", exc, level="error")
+
+        _log("  COMPLETE: Removed from %d/%d groups", removed_count, len(group_ids))
     except Exception as grp_exc:
-        print(f"  FAILED: {grp_exc}")
-        app.logger.error("Group removal failed for %s: %s", lookup, grp_exc)
-    
-    print("Blocking sign-in...")
+        _log("  FAILED to enumerate groups: %s", grp_exc, level="error")
+
+    # --- Step 8: Block sign-in and rename ---
+    _log("Step 8/8: Blocking sign-in and renaming...")
     try:
         client.block_sign_in(user_id)
-        print("  SUCCESS: Sign-in blocked")
+        _log("  SUCCESS: Sign-in blocked")
     except Exception as block_exc:
-        print(f"  FAILED: {block_exc}")
-        app.logger.error("Block sign-in failed for %s: %s", lookup, block_exc)
-    
+        _log("  FAILED to block sign-in: %s", block_exc, level="error")
+
     now = datetime.now()
     offboard_date = f"{now.month}.{now.day:02d}.{now.strftime('%y')}"
-    new_display_name = f"FE_{display_name} {offboard_date}"
-    print(f"Renaming user and clearing all contact/organization info...")
-    print(f"  New display name: {new_display_name}")
+    base_name = display_name or ""
+    while base_name.startswith("FE_"):
+        base_name = base_name[len("FE_"):]
+    base_name = re.sub(r"\s+\d{1,2}\.\d{1,2}\.\d{2}$", "", base_name).strip()
+    new_display_name = f"FE_{base_name} {offboard_date}"
+    _log("  Renaming to: %s", new_display_name)
     try:
         payload = {
             "displayName": new_display_name,
@@ -3239,21 +3578,69 @@ def _offboard_m365_user(app: Flask, config: AppConfig, user_info: Dict[str, Any]
             "country": None,
         }
         client._request("PATCH", f"/users/{user_id}", json=payload)
-        
-        # Clear manager reference separately
+        _log("  SUCCESS: User renamed and contact/organization info cleared")
+
         try:
             client._request("DELETE", f"/users/{user_id}/manager/$ref")
-            print("  SUCCESS: Manager reference cleared")
+            _log("  SUCCESS: Manager reference cleared")
         except Exception as mgr_exc:
-            print(f"  Manager clear failed (may not have had one): {mgr_exc}")
-        
-        print("  SUCCESS: User renamed and all contact/organization info cleared")
+            _log("  Manager clear skipped (may not have had one): %s", mgr_exc, level="debug")
     except Exception as rename_exc:
-        print(f"  FAILED: {rename_exc}")
-        app.logger.error("Rename/clear failed for %s: %s", lookup, rename_exc)
-    
-    print(f"=== OFFBOARDING COMPLETE ===")
-    app.logger.info("M365 offboarding completed for %s", lookup)
+        _log("  FAILED to rename/clear: %s", rename_exc, level="error")
+
+    _log("=== OFFBOARDING COMPLETE for %s ===", lookup)
+
+
+_EXO_PS5_PATH = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+
+# Preamble shared by every Exchange Online script. All dynamic values are passed
+# as environment variables and read via $env: so they are treated strictly as
+# data and can never be interpreted as PowerShell code (prevents injection) nor
+# break on quotes/special characters.
+_EXO_CONNECT_PREAMBLE = """$env:PSModulePath = [System.Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
+Import-Module ExchangeOnlineManagement -ErrorAction Stop
+$ErrorActionPreference = 'Stop'
+try {
+    Connect-ExchangeOnline -AppId $env:EXO_APP_ID -CertificateThumbprint $env:EXO_CERT_THUMBPRINT -Organization $env:EXO_ORG -ShowBanner:$false -ErrorAction Stop
+"""
+
+_EXO_FINALLY = """
+} catch {
+    Write-Error $_.Exception.Message
+    exit 1
+} finally {
+    try { Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue } catch {}
+}"""
+
+
+def _run_exo_script(
+    config: AppConfig,
+    body: str,
+    values: Dict[str, str],
+    timeout: int = 60,
+) -> subprocess.CompletedProcess:
+    """Run an Exchange Online PowerShell snippet with values passed safely via env.
+
+    ``body`` runs inside the connected try-block and may reference any key from
+    ``values`` as ``$env:<KEY>``. Connection credentials come from ``config``.
+    """
+    script = _EXO_CONNECT_PREAMBLE + body + _EXO_FINALLY
+
+    env = os.environ.copy()
+    env.pop("PSModulePath", None)
+    env["EXO_APP_ID"] = str(config.m365.client_id or "")
+    env["EXO_CERT_THUMBPRINT"] = str(config.m365.cert_thumbprint or "")
+    env["EXO_ORG"] = str(config.m365.exo_organization or "")
+    for key, value in values.items():
+        env[key] = "" if value is None else str(value)
+
+    return subprocess.run(
+        [_EXO_PS5_PATH, "-NoProfile", "-NonInteractive", "-Command", script],
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        env=env,
+    )
 
 
 def _check_mailbox_exists(
@@ -3262,36 +3649,18 @@ def _check_mailbox_exists(
     user_email: str,
 ) -> bool:
     """Check if mailbox exists and is ready using Exchange Online PowerShell."""
-    ps5_path = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-    
-    script = f"""$env:PSModulePath = [System.Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
-Import-Module ExchangeOnlineManagement -ErrorAction Stop
-$ErrorActionPreference = 'Stop'
-try {{
-    Connect-ExchangeOnline -AppId '{config.m365.client_id}' -CertificateThumbprint '{config.m365.cert_thumbprint}' -Organization '{config.m365.exo_organization}' -ShowBanner:$false -ErrorAction Stop
-    
-    $mailbox = Get-Mailbox -Identity '{user_email}' -ErrorAction Stop
-    if ($mailbox) {{
+    body = """
+    $mailbox = Get-Mailbox -Identity $env:EXO_USER_EMAIL -ErrorAction Stop
+    if ($mailbox) {
         Write-Output 'MAILBOX_EXISTS'
-    }}
-}} catch {{
-    Write-Error $_.Exception.Message
-    exit 1
-}} finally {{
-    try {{ Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
-}}"""
-    
-    env = os.environ.copy()
-    env.pop('PSModulePath', None)
-    
-    result = subprocess.run(
-        [ps5_path, "-NoProfile", "-NonInteractive", "-Command", script],
-        capture_output=True,
-        text=True,
+    }
+"""
+    result = _run_exo_script(
+        config,
+        body,
+        {"EXO_USER_EMAIL": user_email},
         timeout=60,
-        env=env,
     )
-    
     return result.returncode == 0 and "MAILBOX_EXISTS" in result.stdout
 
 
@@ -3302,37 +3671,18 @@ def _convert_mailbox_to_shared_and_forward(
     manager_email: str,
 ) -> None:
     """Convert mailbox to shared, hide from GAL, and forward to manager using Exchange Online PowerShell."""
-    ps5_path = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-    
-    script = f"""$env:PSModulePath = [System.Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
-Import-Module ExchangeOnlineManagement -ErrorAction Stop
-$ErrorActionPreference = 'Stop'
-try {{
-    Connect-ExchangeOnline -AppId '{config.m365.client_id}' -CertificateThumbprint '{config.m365.cert_thumbprint}' -Organization '{config.m365.exo_organization}' -ShowBanner:$false -ErrorAction Stop
-    
-    Set-Mailbox -Identity '{user_email}' -Type Shared -ErrorAction Stop
-    Set-Mailbox -Identity '{user_email}' -HiddenFromAddressListsEnabled $true -ErrorAction Stop
-    Set-Mailbox -Identity '{user_email}' -ForwardingAddress '{manager_email}' -DeliverToMailboxAndForward $false -ErrorAction Stop
-    
+    body = """
+    Set-Mailbox -Identity $env:EXO_USER_EMAIL -Type Shared -ErrorAction Stop
+    Set-Mailbox -Identity $env:EXO_USER_EMAIL -HiddenFromAddressListsEnabled $true -ErrorAction Stop
+    Set-Mailbox -Identity $env:EXO_USER_EMAIL -ForwardingAddress $env:EXO_MANAGER_EMAIL -DeliverToMailboxAndForward $false -ErrorAction Stop
     Write-Output 'SUCCESS'
-}} catch {{
-    Write-Error $_.Exception.Message
-    exit 1
-}} finally {{
-    try {{ Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
-}}"""
-    
-    env = os.environ.copy()
-    env.pop('PSModulePath', None)
-    
-    result = subprocess.run(
-        [ps5_path, "-NoProfile", "-NonInteractive", "-Command", script],
-        capture_output=True,
-        text=True,
+"""
+    result = _run_exo_script(
+        config,
+        body,
+        {"EXO_USER_EMAIL": user_email, "EXO_MANAGER_EMAIL": manager_email},
         timeout=120,
-        env=env,
     )
-    
     if result.returncode != 0 or "SUCCESS" not in result.stdout:
         error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
         raise RuntimeError(f"Exchange command failed: {error_msg}")
@@ -3344,37 +3694,18 @@ def _add_to_distribution_list(
     user_email: str,
     group_id: str,
 ) -> None:
-    ps5_path = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-    
-    script = f"""$env:PSModulePath = [System.Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
-Import-Module ExchangeOnlineManagement -ErrorAction Stop
-$ErrorActionPreference = 'Stop'
-try {{
-    Connect-ExchangeOnline -AppId '{config.m365.client_id}' -CertificateThumbprint '{config.m365.cert_thumbprint}' -Organization '{config.m365.exo_organization}' -ShowBanner:$false -ErrorAction Stop
-    
-    $group = Get-DistributionGroup -Identity '{group_id}' -ErrorAction Stop
+    body = """
+    $group = Get-DistributionGroup -Identity $env:EXO_GROUP_ID -ErrorAction Stop
     $groupEmail = $group.PrimarySmtpAddress
-    
-    Add-DistributionGroupMember -Identity $groupEmail -Member '{user_email}' -ErrorAction Stop
+    Add-DistributionGroupMember -Identity $groupEmail -Member $env:EXO_USER_EMAIL -ErrorAction Stop
     Write-Output 'SUCCESS'
-}} catch {{
-    Write-Error $_.Exception.Message
-    exit 1
-}} finally {{
-    try {{ Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
-}}"""
-    
-    env = os.environ.copy()
-    env.pop('PSModulePath', None)
-    
-    result = subprocess.run(
-        [ps5_path, "-NoProfile", "-NonInteractive", "-Command", script],
-        capture_output=True,
-        text=True,
+"""
+    result = _run_exo_script(
+        config,
+        body,
+        {"EXO_USER_EMAIL": user_email, "EXO_GROUP_ID": group_id},
         timeout=60,
-        env=env,
     )
-    
     if result.returncode != 0 or "SUCCESS" not in result.stdout:
         error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
         raise RuntimeError(f"Exchange command failed: {error_msg}")
@@ -3387,37 +3718,18 @@ def _remove_from_distribution_list(
     group_id: str,
 ) -> None:
     """Remove user from Distribution List using Exchange Online PowerShell."""
-    ps5_path = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
-    
-    script = f"""$env:PSModulePath = [System.Environment]::GetEnvironmentVariable('PSModulePath', 'Machine')
-Import-Module ExchangeOnlineManagement -ErrorAction Stop
-$ErrorActionPreference = 'Stop'
-try {{
-    Connect-ExchangeOnline -AppId '{config.m365.client_id}' -CertificateThumbprint '{config.m365.cert_thumbprint}' -Organization '{config.m365.exo_organization}' -ShowBanner:$false -ErrorAction Stop
-    
-    $group = Get-DistributionGroup -Identity '{group_id}' -ErrorAction Stop
+    body = """
+    $group = Get-DistributionGroup -Identity $env:EXO_GROUP_ID -ErrorAction Stop
     $groupEmail = $group.PrimarySmtpAddress
-    
-    Remove-DistributionGroupMember -Identity $groupEmail -Member '{user_email}' -Confirm:$false -ErrorAction Stop
+    Remove-DistributionGroupMember -Identity $groupEmail -Member $env:EXO_USER_EMAIL -Confirm:$false -ErrorAction Stop
     Write-Output 'SUCCESS'
-}} catch {{
-    Write-Error $_.Exception.Message
-    exit 1
-}} finally {{
-    try {{ Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue }} catch {{}}
-}}"""
-    
-    env = os.environ.copy()
-    env.pop('PSModulePath', None)
-    
-    result = subprocess.run(
-        [ps5_path, "-NoProfile", "-NonInteractive", "-Command", script],
-        capture_output=True,
-        text=True,
+"""
+    result = _run_exo_script(
+        config,
+        body,
+        {"EXO_USER_EMAIL": user_email, "EXO_GROUP_ID": group_id},
         timeout=60,
-        env=env,
     )
-    
     if result.returncode != 0 or "SUCCESS" not in result.stdout:
         error_msg = result.stderr.strip() or result.stdout.strip() or "Unknown error"
         raise RuntimeError(f"Exchange command failed: {error_msg}")
@@ -3427,14 +3739,49 @@ try {{
 
 
 def main() -> None:
-    """Run the development server."""
+    """Run the web server.
+
+    Defaults to the production-grade waitress WSGI server when available. Set
+    ONBOARD_WEB_SERVER=flask to force Flask's built-in dev server. The Werkzeug
+    debugger (ONBOARD_WEB_DEBUG=1) allows remote code execution and must never
+    be enabled on a network-exposed/production deployment.
+    """
 
     app = create_app()
-    app.run(
-        host=os.environ.get("ONBOARD_WEB_HOST", "0.0.0.0"),
-        port=int(os.environ.get("ONBOARD_WEB_PORT", "5000")),
-        debug=os.environ.get("ONBOARD_WEB_DEBUG") == "1",
-    )
+    host = os.environ.get("ONBOARD_WEB_HOST", "0.0.0.0")
+    port = int(os.environ.get("ONBOARD_WEB_PORT", "5000"))
+    debug = os.environ.get("ONBOARD_WEB_DEBUG") == "1"
+    server = os.environ.get("ONBOARD_WEB_SERVER", "").strip().lower()
+
+    if host == "0.0.0.0":
+        app.logger.warning(
+            "Server binding to 0.0.0.0 (all interfaces). Ensure auth is enabled "
+            "and the service is firewalled appropriately."
+        )
+
+    if debug:
+        app.logger.warning(
+            "ONBOARD_WEB_DEBUG=1: starting the Flask dev server WITH the Werkzeug "
+            "debugger enabled. This permits remote code execution; never use this "
+            "on a shared or production host."
+        )
+        app.run(host=host, port=port, debug=True)
+        return
+
+    if server != "flask":
+        try:
+            from waitress import serve
+
+            app.logger.info("Starting waitress production server on %s:%s", host, port)
+            serve(app, host=host, port=port)
+            return
+        except ImportError:
+            app.logger.warning(
+                "waitress is not installed; falling back to the Flask development "
+                "server. Install waitress (see requirements.txt) for production use."
+            )
+
+    app.run(host=host, port=port, debug=False)
 
 
 if __name__ == "__main__":
