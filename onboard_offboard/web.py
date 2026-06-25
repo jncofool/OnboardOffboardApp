@@ -12,7 +12,7 @@ import time
 import unicodedata
 from html import escape
 from dataclasses import replace
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import unquote
@@ -358,10 +358,22 @@ def register_routes(app: Flask) -> None:
     def inject_globals() -> Dict[str, Any]:
         config = _load_app_config(app)
         roles = _load_roles(config)
+        m365 = getattr(config, "m365", None)
+        cert_warning = None
+        if m365:
+            level = m365.cert_expiry_warning_level
+            if level:
+                days = m365.cert_expiry_days_remaining
+                cert_warning = {
+                    "level": level,  # 'expired', 'critical', 'warning'
+                    "days": days,
+                    "expiry_date": m365.cert_expiry_date.isoformat() if m365.cert_expiry_date else None,
+                }
         return {
             "app_config": config,
             "job_roles": roles,
             "current_user": session.get("user"),
+            "cert_warning": cert_warning,
         }
 
     @app.route("/login")
@@ -563,6 +575,15 @@ def register_routes(app: Flask) -> None:
 
                 cert_thumbprint_input = request.form.get("m365_cert_thumbprint", "").strip()
                 cert_thumbprint = cert_thumbprint_input or current_m365.cert_thumbprint
+                cert_expiry_raw = request.form.get("m365_cert_expiry_date", "").strip()
+                cert_expiry_date = None
+                if cert_expiry_raw:
+                    try:
+                        cert_expiry_date = date.fromisoformat(cert_expiry_raw)
+                    except ValueError:
+                        raise ValueError("Certificate Expiry Date must be in YYYY-MM-DD format.")
+                else:
+                    cert_expiry_date = current_m365.cert_expiry_date
                 exo_org_input = request.form.get("m365_exo_organization", "").strip()
                 exo_organization = exo_org_input or current_m365.exo_organization
 
@@ -574,6 +595,7 @@ def register_routes(app: Flask) -> None:
                     cache_ttl_minutes=max(1, cache_ttl),
                     default_usage_location=default_usage_location,
                     cert_thumbprint=cert_thumbprint,
+                    cert_expiry_date=cert_expiry_date,
                     exo_organization=exo_organization,
                 )
 
@@ -2118,6 +2140,9 @@ def _build_m365_status(app: Flask, config: AppConfig) -> Dict[str, Any]:
         "cache_path": str(m365_config.sku_cache_file),
         "cache_ttl_minutes": m365_config.cache_ttl_minutes,
         "has_secret": bool(m365_config.client_secret),
+        "cert_expiry_date": m365_config.cert_expiry_date.isoformat() if m365_config.cert_expiry_date else None,
+        "cert_expiry_days": m365_config.cert_expiry_days_remaining,
+        "cert_warning_level": m365_config.cert_expiry_warning_level,
     }
 
     if not m365_config.has_credentials:

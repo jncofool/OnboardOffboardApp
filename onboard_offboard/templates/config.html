@@ -82,7 +82,7 @@
       </div>
     </section>
 
-    <section>
+    <section id="cert_section">
       <h2>Microsoft 365</h2>
       <p>
         Provide your Microsoft Graph application credentials to manage cloud licenses after onboarding.
@@ -123,8 +123,42 @@
             autocomplete="off"
           />
         </div>
-        <div class="field">
-          <label for="m365_cert_thumbprint">Certificate Thumbprint (for Distribution Lists)</label>
+        <div class="field" id="cert_thumbprint_field">
+          {% if cert_warning %}
+            {% set wl = cert_warning.level %}
+            <div class="cert-inline-alert cert-inline-{{ wl }}" role="alert" style="
+              display:flex; gap:0.65rem; align-items:flex-start;
+              padding: 0.85rem 1rem; margin-bottom: 0.75rem;
+              border-radius: 8px; border: 2px solid;
+              {% if wl == 'expired' %}background:rgba(220,53,69,0.12);border-color:#dc3545;color:#842029;
+              {% elif wl == 'critical' %}background:rgba(220,53,69,0.08);border-color:rgba(220,53,69,0.5);color:#842029;
+              {% else %}background:rgba(255,193,7,0.1);border-color:rgba(255,193,7,0.55);color:#664d03;{% endif %}
+            ">
+              <span style="font-size:1.3rem;line-height:1.2;flex-shrink:0;">
+                {% if wl == 'expired' %}🔴{% elif wl == 'critical' %}🟠{% else %}⚠️{% endif %}
+              </span>
+              <div>
+                <strong>
+                  {% if wl == 'expired' %}
+                    Certificate EXPIRED — Update the thumbprint below immediately
+                  {% elif wl == 'critical' %}
+                    Certificate expires in {{ cert_warning.days }} day{{ 's' if cert_warning.days != 1 else '' }} — Update the thumbprint below now
+                  {% else %}
+                    Certificate expires in {{ cert_warning.days }} days ({{ cert_warning.expiry_date }}) — plan to update soon
+                  {% endif %}
+                </strong>
+                <div style="margin-top:0.4rem;font-size:0.88rem;">
+                  In Azure Portal → <strong>App registrations → {{ config.m365.client_id or 'your app' }} →
+                  Certificates &amp; secrets → Certificates</strong> — upload a new certificate,
+                  copy its thumbprint, and paste it into the field below. Then update the expiry date.
+                </div>
+              </div>
+            </div>
+          {% endif %}
+          <label for="m365_cert_thumbprint">
+            Certificate Thumbprint
+            <span style="font-weight:400;color:#6c757d;">(Exchange Online / Distribution Lists)</span>
+          </label>
           <input
             id="m365_cert_thumbprint"
             name="m365_cert_thumbprint"
@@ -132,8 +166,45 @@
             value="{{ config.m365.cert_thumbprint or '' }}"
             placeholder="124BF450D129E75E40B1DA1DA64122433637FF9E"
             autocomplete="off"
+            {% if cert_warning and cert_warning.level in ('expired', 'critical') %}
+            style="border-color:#dc3545;box-shadow:0 0 0 3px rgba(220,53,69,0.15);"
+            {% elif cert_warning %}
+            style="border-color:#ffc107;box-shadow:0 0 0 3px rgba(255,193,7,0.15);"
+            {% endif %}
           />
-          <div class="hint">Required for Exchange Online PowerShell to manage Distribution Lists.</div>
+          <div class="hint">
+            Required for Exchange Online PowerShell to manage Distribution Lists.
+            Generate a self-signed certificate in Azure and register it against your app registration
+            (<strong>App registrations → Certificates &amp; secrets → Certificates</strong>).
+            The app name in Azure Portal is the one matching Client ID <code>{{ config.m365.client_id or '&lt;not set&gt;' }}</code>.
+          </div>
+        </div>
+        <div class="field">
+          <label for="m365_cert_expiry_date">
+            Certificate Expiry Date
+            {% if cert_warning %}
+              <span class="badge {{ cert_warning.level }}" style="margin-left:0.5rem;">
+                {% if cert_warning.level == 'expired' %}Expired{% elif cert_warning.level == 'critical' %}{{ cert_warning.days }}d left{% else %}{{ cert_warning.days }}d left{% endif %}
+              </span>
+            {% endif %}
+          </label>
+          <input
+            id="m365_cert_expiry_date"
+            name="m365_cert_expiry_date"
+            type="date"
+            value="{{ config.m365.cert_expiry_date.isoformat() if config.m365.cert_expiry_date else '' }}"
+            autocomplete="off"
+            {% if cert_warning and cert_warning.level in ('expired', 'critical') %}
+            style="border-color:#dc3545;box-shadow:0 0 0 3px rgba(220,53,69,0.15);"
+            {% elif cert_warning %}
+            style="border-color:#ffc107;box-shadow:0 0 0 3px rgba(255,193,7,0.15);"
+            {% endif %}
+          />
+          <div class="hint">
+            Set this to the certificate's expiry date so the portal can warn you before it expires.
+            You can find the expiry date in Azure Portal under
+            <strong>App registrations → Certificates &amp; secrets → Certificates</strong>.
+          </div>
         </div>
         <div class="field">
           <label for="m365_exo_organization">Exchange Organization Domain</label>
@@ -191,6 +262,22 @@
           <li><strong>SKUs cached:</strong> <span id="m365_status_count">{{ m365_status.sku_count }}</span></li>
           <li><strong>Last refreshed:</strong> <span id="m365_status_fetched">{{ m365_status.fetched_at or 'Never' }}</span></li>
           <li><strong>Cache TTL:</strong> {{ m365_status.cache_ttl_minutes }} minutes</li>
+          <li>
+            <strong>EXO Certificate:</strong>
+            {% if m365_status.cert_expiry_date %}
+              {% if m365_status.cert_warning_level == 'expired' %}
+                <span class="badge critical">EXPIRED {{ m365_status.cert_expiry_date }}</span>
+              {% elif m365_status.cert_warning_level == 'critical' %}
+                <span class="badge critical">Expires {{ m365_status.cert_expiry_date }} ({{ m365_status.cert_expiry_days }}d)</span>
+              {% elif m365_status.cert_warning_level == 'warning' %}
+                <span class="badge warning">Expires {{ m365_status.cert_expiry_date }} ({{ m365_status.cert_expiry_days }}d)</span>
+              {% else %}
+                <span class="badge ok">Valid until {{ m365_status.cert_expiry_date }} ({{ m365_status.cert_expiry_days }}d)</span>
+              {% endif %}
+            {% else %}
+              <span style="color:#6c757d;">No expiry date set — add one above</span>
+            {% endif %}
+          </li>
         </ul>
         <button type="button" id="m365_refresh_button" {% if not m365_status.configured %}disabled{% endif %}>
           Refresh License Catalog

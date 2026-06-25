@@ -245,6 +245,64 @@
         background: rgba(220, 53, 69, 0.15);
         color: #842029;
       }
+      .badge.warning {
+        background: rgba(255, 193, 7, 0.2);
+        color: #664d03;
+      }
+      .badge.critical {
+        background: rgba(220, 53, 69, 0.15);
+        color: #842029;
+      }
+      /* Cert expiry banner */
+      .cert-banner {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.85rem 1.25rem;
+        margin-bottom: 1.25rem;
+        border-radius: 10px;
+        font-size: 0.95rem;
+        font-weight: 500;
+        border: 2px solid;
+      }
+      .cert-banner.warning {
+        background: rgba(255, 193, 7, 0.12);
+        border-color: rgba(255, 193, 7, 0.5);
+        color: #664d03;
+      }
+      .cert-banner.critical {
+        background: rgba(220, 53, 69, 0.1);
+        border-color: rgba(220, 53, 69, 0.4);
+        color: #842029;
+      }
+      .cert-banner.expired {
+        background: rgba(220, 53, 69, 0.18);
+        border-color: #dc3545;
+        color: #842029;
+      }
+      .cert-banner-icon {
+        font-size: 1.4rem;
+        flex-shrink: 0;
+        line-height: 1;
+      }
+      .cert-banner-body {
+        flex: 1;
+      }
+      .cert-banner-body strong {
+        display: block;
+        margin-bottom: 0.2rem;
+      }
+      .cert-banner-link {
+        display: inline-block;
+        margin-top: 0.4rem;
+        font-weight: 700;
+        text-decoration: underline;
+        color: inherit;
+        white-space: nowrap;
+      }
+      .cert-banner-link:hover {
+        opacity: 0.8;
+      }
       .checkbox-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -385,6 +443,33 @@
       </div>
     </header>
     <main>
+      {% if cert_warning %}
+        {% set level = cert_warning.level %}
+        {% set days = cert_warning.days %}
+        <div class="cert-banner {{ level }}" role="alert">
+          <span class="cert-banner-icon">
+            {% if level == 'expired' %}🔴{% elif level == 'critical' %}🟠{% else %}⚠️{% endif %}
+          </span>
+          <div class="cert-banner-body">
+            {% if level == 'expired' %}
+              <strong>Exchange Online Certificate EXPIRED</strong>
+              The EXO certificate expired on {{ cert_warning.expiry_date }}.
+              Distribution list management is currently broken. Replace the certificate immediately.
+            {% elif level == 'critical' %}
+              <strong>Exchange Online Certificate Expiring in {{ days }} day{{ 's' if days != 1 else '' }}</strong>
+              The EXO certificate expires on {{ cert_warning.expiry_date }}.
+              Distribution list management will stop working when it expires. Update it now.
+            {% else %}
+              <strong>Exchange Online Certificate Expiring Soon — {{ days }} days remaining</strong>
+              The EXO certificate expires on {{ cert_warning.expiry_date }}.
+              Plan to replace it before it expires to avoid disruption.
+            {% endif %}
+            <a class="cert-banner-link" href="{{ url_for('edit_config') }}#cert_section">
+              → Go to Configuration to update the certificate thumbprint
+            </a>
+          </div>
+        </div>
+      {% endif %}
       {% with messages = get_flashed_messages(with_categories=true) %}
         {% if messages %}
           {% for category, message in messages %}

@@ -5,6 +5,7 @@ import os
 import base64
 import hashlib
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
@@ -191,6 +192,7 @@ class M365Config:
     cache_ttl_minutes: int = 720  # 12 hours by default
     default_usage_location: Optional[str] = None
     cert_thumbprint: Optional[str] = None
+    cert_expiry_date: Optional[date] = None  # Date the EXO certificate expires
     exo_organization: Optional[str] = None
 
     @property
@@ -201,8 +203,28 @@ class M365Config:
     def has_exo_credentials(self) -> bool:
         return bool(self.client_id and self.cert_thumbprint and self.exo_organization)
 
+    @property
+    def cert_expiry_days_remaining(self) -> Optional[int]:
+        """Days until the EXO certificate expires. Negative means already expired."""
+        if not self.cert_expiry_date:
+            return None
+        return (self.cert_expiry_date - date.today()).days
 
-@dataclass
+    @property
+    def cert_expiry_warning_level(self) -> Optional[str]:
+        """Returns 'expired', 'critical' (≤14 days), 'warning' (≤30 days), or None."""
+        days = self.cert_expiry_days_remaining
+        if days is None:
+            return None
+        if days < 0:
+            return "expired"
+        if days <= 14:
+            return "critical"
+        if days <= 30:
+            return "warning"
+        return None
+
+
 @dataclass
 class AuthConfig:
     """Settings for Entra ID / Microsoft identity authentication."""
@@ -379,6 +401,25 @@ def _optional_str(value: Any) -> Optional[str]:
     return str(value)
 
 
+def _parse_date(value: Any) -> Optional[date]:
+    """Parse a YYYY-MM-DD string (or date object) to a :class:`date`."""
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        try:
+            return date.fromisoformat(stripped)
+        except ValueError:
+            return None
+    return None
+
+
 def load_config(path: Optional[Path] = None) -> AppConfig:
     """Load application configuration from disk and environment variables."""
 
@@ -455,6 +496,7 @@ def load_config(path: Optional[Path] = None) -> AppConfig:
         cache_ttl_minutes=cache_ttl,
         default_usage_location=_optional_str(m365_section.get("default_usage_location")),
         cert_thumbprint=_optional_str(m365_section.get("cert_thumbprint")),
+        cert_expiry_date=_parse_date(m365_section.get("cert_expiry_date")),
         exo_organization=_optional_str(m365_section.get("exo_organization")),
     )
 
@@ -548,6 +590,7 @@ def config_to_dict(config: AppConfig) -> Dict[str, Any]:
             "cache_ttl_minutes": config.m365.cache_ttl_minutes,
             "default_usage_location": config.m365.default_usage_location or "",
             "cert_thumbprint": config.m365.cert_thumbprint or "",
+            "cert_expiry_date": config.m365.cert_expiry_date.isoformat() if config.m365.cert_expiry_date else "",
             "exo_organization": config.m365.exo_organization or "",
         },
         "auth": {
@@ -598,4 +641,5 @@ __all__ = [
     "load_config",
     "_encrypt_value",
     "_save_encrypted_secret",
+    "_parse_date",
 ]

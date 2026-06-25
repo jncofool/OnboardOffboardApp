@@ -29,6 +29,12 @@ m365:
   sku_cache_file: data/m365_skus.json
   cache_ttl_minutes: 720
   default_usage_location: ""
+  # Certificate thumbprint for Exchange Online PowerShell (Distribution Lists).
+  # Find this in Azure Portal → App registrations → your app → Certificates & secrets → Certificates.
+  cert_thumbprint: ""
+  # Set to the certificate's expiry date (YYYY-MM-DD) so the portal warns you before it expires.
+  cert_expiry_date: ""
+  exo_organization: ""
 
 smtp:
   host: ""

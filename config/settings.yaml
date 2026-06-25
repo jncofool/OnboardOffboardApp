@@ -26,6 +26,7 @@ m365:
   cache_ttl_minutes: 720
   default_usage_location: ""
   cert_thumbprint: ""
+  cert_expiry_date: ""
   exo_organization: ""
 auth:
   enabled: false
