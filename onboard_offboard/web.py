@@ -1180,8 +1180,112 @@ def register_routes(app: Flask) -> None:
         )
         return jsonify(payload)
 
-    @app.get("/api/groups")
-    def api_groups() -> Any:
+    @app.post("/api/m365/skus/refresh")
+    def api_m365_refresh_skus() -> Any:
+        config = _load_app_config(app)
+        client = _get_m365_client(app, config)
+        if not client:
+            payload = _build_m365_status(app, config)
+            payload["items"] = []
+            return jsonify(payload), 400
+
+        try:
+            snapshot = client.refresh_sku_catalog()
+        except M365ClientError as exc:
+            return jsonify({"message": str(exc)}), 500
+        except Exception as exc:
+            return jsonify({"message": str(exc)}), 500
+
+        payload = _build_m365_status(app, config)
+        payload.update(
+            {
+                "sku_count": len(snapshot.skus),
+                "fetched_at": snapshot.fetched_at.isoformat(),
+                "stale": snapshot.stale,
+                "items": snapshot.skus,
+            }
+        )
+        return jsonify(payload)
+
+    @app.get("/api/m365/cert-info")
+    def api_m365_cert_info() -> Any:
+        """Look up a certificate by thumbprint in the Windows cert store and return its expiry date.
+
+        Queries both the LocalMachine\\My and CurrentUser\\My stores so it works
+        regardless of which store the EXO cert was imported into.
+        """
+        thumbprint = request.args.get("thumbprint", "").strip().upper().replace(" ", "").replace(":", "")
+        if not thumbprint:
+            return jsonify({"error": "thumbprint parameter is required"}), 400
+        if not re.fullmatch(r"[0-9A-F]{40}", thumbprint):
+            return jsonify({"error": "thumbprint must be a 40-character hex string"}), 400
+
+        ps_script = r"""
+$thumb = $env:CERT_THUMBPRINT
+$stores = @(
+    [System.Security.Cryptography.X509Certificates.X509Store]::new(
+        [System.Security.Cryptography.X509Certificates.StoreName]::My,
+        [System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine),
+    [System.Security.Cryptography.X509Certificates.X509Store]::new(
+        [System.Security.Cryptography.X509Certificates.StoreName]::My,
+        [System.Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+)
+foreach ($store in $stores) {
+    try {
+        $store.Open([System.Security.Cryptography.X509Certificates.OpenFlags]::ReadOnly)
+        $cert = $store.Certificates | Where-Object { $_.Thumbprint -eq $thumb } | Select-Object -First 1
+        if ($cert) {
+            $cert | Select-Object -Property Thumbprint,
+                @{n='Subject';e={$_.Subject}},
+                @{n='NotAfter';e={$_.NotAfter.ToString('yyyy-MM-dd')}},
+                @{n='NotBefore';e={$_.NotBefore.ToString('yyyy-MM-dd')}},
+                @{n='FriendlyName';e={$_.FriendlyName}},
+                @{n='Issuer';e={$_.Issuer}} | ConvertTo-Json -Compress
+            $store.Close()
+            exit 0
+        }
+        $store.Close()
+    } catch {}
+}
+Write-Output 'NOT_FOUND'
+exit 0
+"""
+        ps_exe = r"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+        env = os.environ.copy()
+        env["CERT_THUMBPRINT"] = thumbprint
+        try:
+            result = subprocess.run(
+                [ps_exe, "-NoProfile", "-NonInteractive", "-Command", ps_script],
+                capture_output=True,
+                text=True,
+                timeout=15,
+                env=env,
+            )
+        except FileNotFoundError:
+            return jsonify({"error": "PowerShell is not available on this server"}), 500
+        except subprocess.TimeoutExpired:
+            return jsonify({"error": "Certificate lookup timed out"}), 500
+
+        output = result.stdout.strip()
+        if not output or output == "NOT_FOUND":
+            return jsonify({"error": f"Certificate with thumbprint {thumbprint} was not found in LocalMachine\\My or CurrentUser\\My"}), 404
+
+        try:
+            cert_data = json.loads(output)
+        except json.JSONDecodeError:
+            app.logger.warning("cert-info: unexpected PS output: %s", output[:200])
+            return jsonify({"error": "Unexpected response from certificate store"}), 500
+
+        return jsonify({
+            "thumbprint": cert_data.get("Thumbprint", thumbprint),
+            "subject": cert_data.get("Subject", ""),
+            "friendly_name": cert_data.get("FriendlyName", ""),
+            "issuer": cert_data.get("Issuer", ""),
+            "not_before": cert_data.get("NotBefore", ""),
+            "not_after": cert_data.get("NotAfter", ""),
+        })
+
+
         config = _load_app_config(app)
         query = request.args.get("q", "").strip()
         limit = _parse_api_limit(request.args.get("limit"))

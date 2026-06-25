@@ -159,24 +159,27 @@
             Certificate Thumbprint
             <span style="font-weight:400;color:#6c757d;">(Exchange Online / Distribution Lists)</span>
           </label>
-          <input
-            id="m365_cert_thumbprint"
-            name="m365_cert_thumbprint"
-            type="text"
-            value="{{ config.m365.cert_thumbprint or '' }}"
-            placeholder="124BF450D129E75E40B1DA1DA64122433637FF9E"
-            autocomplete="off"
-            {% if cert_warning and cert_warning.level in ('expired', 'critical') %}
-            style="border-color:#dc3545;box-shadow:0 0 0 3px rgba(220,53,69,0.15);"
-            {% elif cert_warning %}
-            style="border-color:#ffc107;box-shadow:0 0 0 3px rgba(255,193,7,0.15);"
-            {% endif %}
-          />
+          <div style="display:flex;gap:0.5rem;align-items:flex-start;">
+            <input
+              id="m365_cert_thumbprint"
+              name="m365_cert_thumbprint"
+              type="text"
+              value="{{ config.m365.cert_thumbprint or '' }}"
+              placeholder="124BF450D129E75E40B1DA1DA64122433637FF9E"
+              autocomplete="off"
+              style="flex:1;{% if cert_warning and cert_warning.level in ('expired', 'critical') %}border-color:#dc3545;box-shadow:0 0 0 3px rgba(220,53,69,0.15);{% elif cert_warning %}border-color:#ffc107;box-shadow:0 0 0 3px rgba(255,193,7,0.15);{% endif %}"
+            />
+            <button type="button" id="cert_lookup_button" class="inline-button" style="white-space:nowrap;margin-top:0;" title="Look up this certificate in the Windows cert store and auto-fill the expiry date">
+              Look up cert
+            </button>
+          </div>
+          <div id="cert_lookup_status" style="margin-top:0.4rem;font-size:0.85rem;display:none;"></div>
           <div class="hint">
             Required for Exchange Online PowerShell to manage Distribution Lists.
             Generate a self-signed certificate in Azure and register it against your app registration
             (<strong>App registrations → Certificates &amp; secrets → Certificates</strong>).
             The app name in Azure Portal is the one matching Client ID <code>{{ config.m365.client_id or '&lt;not set&gt;' }}</code>.
+            Click <strong>Look up cert</strong> to auto-fill the expiry date from the Windows certificate store.
           </div>
         </div>
         <div class="field">
@@ -1660,6 +1663,78 @@
       roleResetButton?.addEventListener("click", resetRoleForm);
 
       renderRoleTable();
+
+      // ------------------------------------------------------------------ //
+      // Certificate thumbprint → auto-fill expiry date                     //
+      // ------------------------------------------------------------------ //
+      const certThumbprintInput = document.getElementById("m365_cert_thumbprint");
+      const certExpiryInput = document.getElementById("m365_cert_expiry_date");
+      const certLookupButton = document.getElementById("cert_lookup_button");
+      const certLookupStatus = document.getElementById("cert_lookup_status");
+
+      const showCertStatus = (message, isError = false) => {
+        if (!certLookupStatus) return;
+        certLookupStatus.style.display = "block";
+        certLookupStatus.style.color = isError ? "#842029" : "#0f5132";
+        certLookupStatus.textContent = message;
+      };
+
+      const clearCertStatus = () => {
+        if (!certLookupStatus) return;
+        certLookupStatus.style.display = "none";
+        certLookupStatus.textContent = "";
+      };
+
+      const lookupCert = async () => {
+        const thumbprint = (certThumbprintInput?.value || "").trim();
+        if (!thumbprint) {
+          showCertStatus("Enter a certificate thumbprint first.", true);
+          return;
+        }
+        if (certLookupButton) {
+          certLookupButton.disabled = true;
+          certLookupButton.textContent = "Looking up…";
+        }
+        clearCertStatus();
+        try {
+          const url = new URL("/api/m365/cert-info", window.location.origin);
+          url.searchParams.set("thumbprint", thumbprint);
+          const response = await fetch(url.toString(), { headers: { Accept: "application/json" } });
+          const data = await response.json();
+          if (!response.ok) {
+            showCertStatus(data.error || "Certificate not found in store.", true);
+            return;
+          }
+          // Auto-fill expiry date
+          if (certExpiryInput && data.not_after) {
+            certExpiryInput.value = data.not_after;
+          }
+          const parts = [data.not_after ? `Expires ${data.not_after}` : null,
+                         data.subject ? `Subject: ${data.subject}` : null,
+                         data.friendly_name ? `(${data.friendly_name})` : null].filter(Boolean);
+          showCertStatus("✓ " + parts.join(" — "));
+        } catch (err) {
+          showCertStatus("Lookup failed: " + (err.message || String(err)), true);
+        } finally {
+          if (certLookupButton) {
+            certLookupButton.disabled = false;
+            certLookupButton.textContent = "Look up cert";
+          }
+        }
+      };
+
+      certLookupButton?.addEventListener("click", lookupCert);
+
+      // Also auto-lookup when the thumbprint field loses focus if it changed
+      let _lastLookedUpThumbprint = (certThumbprintInput?.value || "").trim().toUpperCase();
+      certThumbprintInput?.addEventListener("blur", () => {
+        const current = (certThumbprintInput.value || "").trim().toUpperCase();
+        if (current && current !== _lastLookedUpThumbprint && current.length === 40) {
+          _lastLookedUpThumbprint = current;
+          lookupCert();
+        }
+      });
+
     });
   </script>
 {% endblock %}
