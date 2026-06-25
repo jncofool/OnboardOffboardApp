@@ -1180,33 +1180,6 @@ def register_routes(app: Flask) -> None:
         )
         return jsonify(payload)
 
-    @app.post("/api/m365/skus/refresh")
-    def api_m365_refresh_skus() -> Any:
-        config = _load_app_config(app)
-        client = _get_m365_client(app, config)
-        if not client:
-            payload = _build_m365_status(app, config)
-            payload["items"] = []
-            return jsonify(payload), 400
-
-        try:
-            snapshot = client.refresh_sku_catalog()
-        except M365ClientError as exc:
-            return jsonify({"message": str(exc)}), 500
-        except Exception as exc:
-            return jsonify({"message": str(exc)}), 500
-
-        payload = _build_m365_status(app, config)
-        payload.update(
-            {
-                "sku_count": len(snapshot.skus),
-                "fetched_at": snapshot.fetched_at.isoformat(),
-                "stale": snapshot.stale,
-                "items": snapshot.skus,
-            }
-        )
-        return jsonify(payload)
-
     @app.get("/api/m365/cert-info")
     def api_m365_cert_info() -> Any:
         """Look up a certificate by thumbprint in the Windows cert store and return its expiry date.
@@ -1285,7 +1258,8 @@ exit 0
             "not_after": cert_data.get("NotAfter", ""),
         })
 
-
+    @app.get("/api/groups")
+    def api_groups() -> Any:
         config = _load_app_config(app)
         query = request.args.get("q", "").strip()
         limit = _parse_api_limit(request.args.get("limit"))
